@@ -9,7 +9,13 @@
 # de passe (UI_USER / UI_PASSWORD), sauf /api/worker/* reserve aux workers (jeton). L'API n'est pas exposee.
 #
 # Variables generees par Coolify : SERVICE_FQDN_WEB_3000 (domaine du site), SERVICE_PASSWORD_POSTGRES,
-# SERVICE_PASSWORD_UI. A definir dans Coolify si besoin : PHOTOS_DIR (dossier surveille sur l'hote), UI_USER.
+# SERVICE_PASSWORD_UI. A definir dans Coolify si besoin : PHOTOS_DIR, UI_USER.
+#
+# PHOTOS_DIR (defaut /tank/files/files/photoflow) est LE dossier des photos sur l'hote :
+#   - tout fichier image depose dedans (sous-dossiers compris) est ingere par le watcher, nom conserve ;
+#   - les photos televersees depuis le site y sont rangees aussi, sous _uploads/<date>/ ;
+#   - les miniatures et caches restent dans le volume photoflow-data (regenerables).
+# Un seul endroit a sauvegarder. L'API le monte en ecriture (uploads), le watcher en lecture seule.
 
 services:
   db:
@@ -47,10 +53,11 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-google/siglip2-base-patch16-256}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
       CORS_ORIGINS: "[]"
+      UPLOADS_DIR: /photos/_uploads
       WORKER_DEAD_MINUTES: ${WORKER_DEAD_MINUTES:-5}
       WORKER_ABSENT_HOURS: ${WORKER_ABSENT_HOURS:-6}
     volumes:
-      - ${PHOTOS_DIR:-/home/rboudrouss/photoflow/incoming}:/photos:ro
+      - ${PHOTOS_DIR:-/tank/files/files/photoflow}:/photos
       - photoflow-data:/data
     depends_on:
       db:
@@ -79,7 +86,7 @@ services:
       PHOTOS_ROOT: /photos
       DATA_DIR: /data
     volumes:
-      - ${PHOTOS_DIR:-/home/rboudrouss/photoflow/incoming}:/photos:ro
+      - ${PHOTOS_DIR:-/tank/files/files/photoflow}:/photos:ro
       - photoflow-data:/data
     depends_on:
       db:

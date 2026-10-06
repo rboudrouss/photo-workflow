@@ -645,7 +645,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 @app.post("/api/upload")
 async def upload(files: list[UploadFile] = File(...), session: Session = Depends(get_session)):
     """Televerse des photos. Le nom de fichier est conserve tel quel dans photos.filename (c'est l'identifiant
-    de l'utilisateur) ; le fichier est range sous DATA_DIR/_uploads/<date>/. Un fichier deja en base (meme
+    de l'utilisateur) ; le fichier est range sous UPLOADS_DIR/<date>/ (voir config). Un fichier deja en base (meme
     contenu) est signale comme doublon avec l'id de la photo existante."""
     out = []
     for f in files:

@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     # Dossier des originaux (lecture seule) et dossier des derives (miniatures, exports, batches).
     photos_root: Path = Path("/photos")
     data_dir: Path = Path("/data")
+    # Ou ranger les photos televersees depuis l'interface. Defaut : DATA_DIR/_uploads. Sur le serveur on le met
+    # dans le dossier des photos (PHOTOS_ROOT/_uploads, monte en ecriture) pour n'avoir qu'un endroit a sauvegarder.
+    uploads_dir: Path | None = None
+
+    @property
+    def uploads_root(self) -> Path:
+        return self.uploads_dir or (self.data_dir / "_uploads")
 
     # Tailles des derives generes a l'ingestion.
     thumb_size: int = 320

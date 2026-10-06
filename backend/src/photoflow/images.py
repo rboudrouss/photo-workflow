@@ -76,7 +76,8 @@ UPLOADS_PREFIX = "_uploads/"
 
 
 def original_path(rel_path: str) -> Path:
-    """PHOTOS_ROOT est monte en lecture seule ; les photos televersees vivent sous DATA_DIR/_uploads/."""
+    """Les photos televersees ont un rel_path '_uploads/<date>/<nom>' resolu sous UPLOADS_DIR (settings.uploads_root),
+    les autres sous PHOTOS_ROOT. Si UPLOADS_DIR = PHOTOS_ROOT/_uploads, les deux coincident et le watcher les voit."""
     if rel_path.startswith(UPLOADS_PREFIX):
-        return settings.data_dir / rel_path
+        return settings.uploads_root / rel_path[len(UPLOADS_PREFIX):]
     return settings.photos_root / rel_path

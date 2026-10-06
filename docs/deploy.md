@@ -49,7 +49,7 @@ Dans l'interface : Projet → Nouvelle ressource → Docker Compose (GitHub App 
 `rboudrouss/photo-workflow`, branche `main`, fichier compose `/docker-compose.coolify.yml`. Puis :
 
 1. domaine du service `web` : `https://photoflow.rboud.com` ;
-2. variables : `PHOTOS_DIR` si le dossier surveillé n'est pas `/home/rboudrouss/photoflow/incoming`,
+2. variables : `PHOTOS_DIR` si le dossier des photos n'est pas `/tank/files/files/photoflow`,
    `UI_USER` si autre que `photoflow`. `SERVICE_PASSWORD_UI` est généré par Coolify : c'est le mot de passe du
    site, à lire dans l'onglet variables ;
 3. déployer. L'API crée ou met à jour le schéma à chaque démarrage, rien à lancer à la main.
@@ -67,11 +67,18 @@ coolify app create github --server-uuid <srv> --project-uuid <proj> --environmen
 coolify deploy ...
 ```
 
-## Dossier surveillé
+## Le dossier des photos
 
-`PHOTOS_DIR` (défaut `/home/rboudrouss/photoflow/incoming`) est monté en lecture seule dans l'API et le
-watcher. Tout fichier image qui y arrive (copyparty, rsync, scp) est ingéré sous une minute, nom conservé. Les
-photos ajoutées depuis la page « Ajouter » vont dans le volume `photoflow-data`.
+`PHOTOS_DIR` (défaut `/tank/files/files/photoflow`) est le seul endroit où vivent les originaux :
+
+- tout fichier image qui y arrive (copyparty, rsync, scp, sous-dossiers compris) est ingéré sous une minute par
+  le watcher, nom conservé, jamais déplacé ;
+- les photos ajoutées depuis la page « Ajouter » y sont écrites sous `_uploads/<date>/` (`UPLOADS_DIR`) ; le
+  watcher les reconnaît comme déjà en base et ne les réingère pas ;
+- miniatures et caches sont dans le volume `photoflow-data`, regénérables.
+
+L'API monte le dossier en écriture, le watcher en lecture seule. C'est ce dossier qu'il faut sauvegarder, avec
+la base.
 
 ## Après le premier déploiement
 

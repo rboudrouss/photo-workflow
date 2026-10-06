@@ -84,10 +84,10 @@ def safe_filename(name: str) -> str:
 
 
 def upload_target(filename: str, data: bytes) -> tuple[Path, str]:
-    """Emplacement d'un fichier televerse : DATA_DIR/_uploads/<date>/<nom>. Si un fichier du meme nom existe deja
+    """Emplacement d'un fichier televerse : UPLOADS_DIR/<date>/<nom>. Si un fichier du meme nom existe deja
     avec un autre contenu, suffixe ' (2)', ' (3)'... Le nom d'origine reste dans photos.filename."""
     day = dt.date.today().isoformat()
-    folder = settings.data_dir / images.UPLOADS_PREFIX / day
+    folder = settings.uploads_root / day
     folder.mkdir(parents=True, exist_ok=True)
     stem, suffix = Path(filename).stem, Path(filename).suffix
     candidate, i = folder / filename, 2

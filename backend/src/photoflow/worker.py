@@ -165,12 +165,13 @@ class RemoteSource:
             versions={n: ex.version for n, ex in loaded.items()},
             vlm_rank=(settings.vlm_rank if settings.vlm_rank is not None else rank_of_model(loaded["vlm"].model_name)) if "vlm" in loaded else None,
         )
+        if "embedding" in loaded:
+            # Le serveur n'a pas le modele : on encode pour lui les requetes de recherche semantique (long-poll).
+            # Demarre AVANT le premier battement : des que le serveur nous voit avec "embedding", on ecoute deja.
+            threading.Thread(target=self._queries_loop, args=(loaded["embedding"],), name="queries", daemon=True).start()
         self._beat()
         self._thread = threading.Thread(target=self._loop, name="heartbeat", daemon=True)
         self._thread.start()
-        if "embedding" in loaded:
-            # Le serveur n'a pas le modele : on encode pour lui les requetes de recherche semantique (long-poll).
-            threading.Thread(target=self._queries_loop, args=(loaded["embedding"],), name="queries", daemon=True).start()
 
     def _queries_loop(self, ex) -> None:
         while not self._stop.is_set():

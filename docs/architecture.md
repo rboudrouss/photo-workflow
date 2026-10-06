@@ -46,8 +46,9 @@ Trois entrées, même fonction `ingest_file` : `photoflow ingest <dossier>` pour
 à ceux déjà en base ; un fichier nouveau n'est ingéré qu'au passage suivant, une fois sa taille et sa date
 stables (copie terminée), donc sous une minute avec l'intervalle par défaut de 30 s. Un fichier remplacé sous
 le même nom n'est pas revu ; un doublon de contenu est ignoré. Les fichiers
-téléversés vont dans `DATA_DIR/_uploads/<date>/` (volume `photoflow-data`), `rel_path` commence par
-`_uploads/` et `original_path()` sait le résoudre. Le nom de fichier d'origine est conservé tel quel dans
+téléversés vont dans `UPLOADS_DIR/<date>/` (défaut `DATA_DIR/_uploads`, sur le serveur `PHOTOS_ROOT/_uploads`
+pour n'avoir qu'un dossier à sauvegarder), `rel_path` commence par `_uploads/` et `original_path()` sait le
+résoudre. Le nom de fichier d'origine est conservé tel quel dans
 `photos.filename` (normalisé NFC, sans séparateurs) : c'est l'identifiant de l'utilisateur, il reste
 recherchable même si deux fichiers portent le même nom. Sur le disque, un homonyme de contenu différent est
 suffixé « (2) ». Un fichier dont le contenu (sha256) est déjà en base n'est pas réajouté, l'interface renvoie
