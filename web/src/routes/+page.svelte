@@ -14,6 +14,7 @@
 	let total = $state<number | null>(null);
 	let loading = $state(false);
 	let error = $state('');
+	let vectorSearch = $state(true);
 	let facets = $state<{ types: { value: string; count: number }[]; scenes: { value: string; count: number }[]; decades: { value: string; count: number }[] }>({ types: [], scenes: [], decades: [] });
 
 	async function load() {
@@ -40,6 +41,8 @@
 		load();
 		try {
 			facets = await api.facets();
+			const st = await api.stats();
+			vectorSearch = st.config?.vector_search ?? true;
 		} catch {}
 	});
 </script>
@@ -48,7 +51,7 @@
 	<input bind:value={q} placeholder="Rechercher : plage, marin, voiture, 1930s..." size="40" />
 	<select bind:value={mode}>
 		<option value="text">texte (legendes)</option>
-		<option value="vector">semantique (embeddings)</option>
+		{#if vectorSearch}<option value="vector">semantique (embeddings)</option>{/if}
 	</select>
 	<select bind:value={typeObjet} onchange={search}>
 		<option value="">tous objets</option>

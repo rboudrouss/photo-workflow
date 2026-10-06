@@ -22,6 +22,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Serveur de coordination : regroupement des visages (HDBSCAN) et construction des series tournent la, sur les
+# vecteurs deja en base. Pas de modele, pas de torch.
+server = [
+    "scikit-learn>=1.5",
+]
 # Modeles specialises (embeddings, visages, clustering). Lourd : torch, transformers, onnxruntime.
 ml = [
     "torch>=2.5",

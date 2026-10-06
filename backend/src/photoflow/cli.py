@@ -277,9 +277,12 @@ def batch_collect(batch_id: str):
 
 @app.command()
 def serve(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
-    """Lance l'API HTTP."""
+    """Lance l'API HTTP. Cree ou met a jour le schema au demarrage (idempotent), pour un deploiement sans etape manuelle."""
     import uvicorn
 
+    from .db import init_db
+
+    init_db()
     uvicorn.run("photoflow.api.app:app", host=host, port=port, reload=reload)
 
 

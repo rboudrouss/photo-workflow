@@ -1,0 +1,121 @@
+# Deploiement COOLIFY du serveur de coordination (photoflow.rboud.com). Voir docs/deploy.md.
+#
+# Ce serveur ne calcule RIEN : l'image backend est construite sans modeles (ML=0, pas de torch), il n'y a ni
+# worker ni llama.cpp, et la recherche semantique par texte est desactivee. Tout le calcul vient des workers
+# distants (docker-compose.worker.yml) qui s'appairent depuis la page Workers.
+#
+# Une seule origine publique : le service web (Node) relaie /api et /media vers l'API interne et porte le mot
+# de passe (UI_USER / UI_PASSWORD), sauf /api/worker/* reserve aux workers (jeton). L'API n'est pas exposee.
+#
+# Variables generees par Coolify : SERVICE_FQDN_WEB_3000 (domaine du site), SERVICE_PASSWORD_POSTGRES,
+# SERVICE_PASSWORD_UI. A definir dans Coolify si besoin : PHOTOS_DIR (dossier surveille sur l'hote), UI_USER.
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: photoflow
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: photoflow
+    # Petit serveur partage : Postgres reste modeste (le fonds tient en quelques Go, vecteurs compris).
+    command: postgres -c shared_buffers=256MB -c work_mem=16MB -c max_connections=40
+    volumes:
+      - photoflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photoflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      args:
+        ML: "0"
+    command: photoflow serve
+    environment:
+      DATABASE_URL: postgresql+psycopg://photoflow:${SERVICE_PASSWORD_POSTGRES}@db:5432/photoflow
+      PHOTOS_ROOT: /photos
+      DATA_DIR: /data
+      # Doit etre identique sur tous les workers : impose par le serveur a leur connexion.
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-google/siglip2-base-patch16-256}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      CORS_ORIGINS: "[]"
+      WORKER_DEAD_MINUTES: ${WORKER_DEAD_MINUTES:-5}
+      WORKER_ABSENT_HOURS: ${WORKER_ABSENT_HOURS:-6}
+    volumes:
+      - ${PHOTOS_DIR:-/home/rboudrouss/photoflow/incoming}:/photos:ro
+      - photoflow-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+
+  # Surveille PHOTOS_DIR : un fichier depose la est ingere comme un upload (nom conserve, jobs en file).
+  watcher:
+    build:
+      context: ./backend
+      args:
+        ML: "0"
+    command: photoflow watch --interval ${WATCH_INTERVAL:-30}
+    environment:
+      DATABASE_URL: postgresql+psycopg://photoflow:${SERVICE_PASSWORD_POSTGRES}@db:5432/photoflow
+      PHOTOS_ROOT: /photos
+      DATA_DIR: /data
+    volumes:
+      - ${PHOTOS_DIR:-/home/rboudrouss/photoflow/incoming}:/photos:ro
+      - photoflow-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    environment:
+      - SERVICE_FQDN_WEB_3000
+      - API_INTERNAL=http://api:8000
+      - PUBLIC_API_BASE=
+      # Origine vue du navigateur, pour le controle anti-CSRF ; sinon deduite de x-forwarded-proto/host (Traefik).
+      - ORIGIN=${SERVICE_FQDN_WEB}
+      - PROTOCOL_HEADER=x-forwarded-proto
+      - HOST_HEADER=x-forwarded-host
+      - UI_USER=${UI_USER:-photoflow}
+      - UI_PASSWORD=${SERVICE_PASSWORD_UI}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/worker/pair',{method:'POST'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+
+volumes:
+  photoflow-db:
+  photoflow-data:

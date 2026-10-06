@@ -5,7 +5,10 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
 	preprocess: vitePreprocess(),
 	kit: {
-		adapter: adapter()
+		adapter: adapter(),
+		// Le controle d'origine est fait dans hooks.server.ts (meme regle, mais il sait lire les en-tetes du
+		// reverse proxy et laisser passer les workers, qui n'envoient que du JSON).
+		csrf: { checkOrigin: false }
 	}
 };
 

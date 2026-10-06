@@ -170,7 +170,21 @@ def _best_title_sql() -> str:
     )
 
 
+def vector_search_available() -> bool:
+    """La recherche par texte dans l'espace SigLIP encode la requete dans l'API : il faut torch (image ML=1)."""
+    import importlib.util
+
+    return importlib.util.find_spec("torch") is not None
+
+
 # --------------------------------------------------------------------------- routes
+
+@app.get("/api/health")
+def health(session: Session = Depends(get_session)):
+    """Sonde pour l'orchestrateur : l'API repond et la base aussi."""
+    session.execute(text("SELECT 1"))
+    return {"ok": True}
+
 
 @app.get("/api/stats")
 def stats(session: Session = Depends(get_session)):
@@ -182,7 +196,8 @@ def stats(session: Session = Depends(get_session)):
     return {
         "photos": photos, "photos_with_caption": captions, "faces": faces, "persons": persons,
         "face_clusters": clusters, "jobs": job_stats(session),
-        "config": {"embedding_model": settings.embedding_model, "vlm_backend": settings.vlm_backend},
+        "config": {"embedding_model": settings.embedding_model, "vlm_backend": settings.vlm_backend,
+                   "vector_search": vector_search_available()},
     }
 
 
@@ -216,6 +231,8 @@ def list_photos(
         where.append("p.nudity_level IN ('suggestive', 'partielle', 'integrale')")
 
     if q and mode == "vector":
+        if not vector_search_available():
+            raise HTTPException(400, "recherche semantique indisponible sur ce serveur (image sans modeles)")
         from ..extractors.embedding import SiglipEncoder
 
         vec = SiglipEncoder.get().encode_texts([q])[0].tolist()

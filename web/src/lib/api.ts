@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/public';
 
-/** Base de l'API, accessible depuis le navigateur. */
+/** Base de l'API vue du navigateur. Vide = meme origine (le serveur Node relaie /api et /media, voir hooks.server.ts). */
 export const API = (env.PUBLIC_API_BASE ?? 'http://localhost:8000').replace(/\/$/, '');
 
 export function media(path: string): string {
