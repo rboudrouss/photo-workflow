@@ -23,6 +23,8 @@ x-backend: &backend
     LLM_BASE_URL: http://llm:8080/v1
     # Cote CPU, 896 px au lieu de 1024 divise presque par deux le temps d'encodage de l'image.
     VLM_MAX_SIDE: ${VLM_MAX_SIDE:-896}
+    # 1 pour tester le relais des requetes de recherche vers un worker (comme sur le serveur sans modeles).
+    QUERY_VIA_WORKERS: ${QUERY_VIA_WORKERS:-0}
   volumes:
     - ${PHOTOS_DIR:-./samples}:/photos:ro
     - photoflow-data:/data

@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import Job, PairRequest, Worker
+from .models import Job, PairRequest, Task, Worker
 
 INSTANCE_TTL = timedelta(minutes=5)  # une instance sans battement depuis 5 min est oubliee
 ONLINE_WINDOW = timedelta(minutes=2)
@@ -146,6 +146,7 @@ def heartbeat(session: Session, w: Worker, instance: str, info: dict[str, Any]) 
             if datetime.fromisoformat(v.get("last_seen", "1970-01-01T00:00:00+00:00")) > now - INSTANCE_TTL}
     inst[instance] = {
         "extractors": [e for e in info.get("extractors", []) if e in TRACKED],
+        "tasks": [t for t in info.get("tasks", []) if t in TASK_KINDS],
         "models": info.get("models") or {},
         "versions": info.get("versions") or {},
         "vlm_rank": info.get("vlm_rank"),
@@ -154,16 +155,18 @@ def heartbeat(session: Session, w: Worker, instance: str, info: dict[str, Any]) 
     }
     w.instances = inst
     w.last_seen_at = now
-    session.execute(
-        text("UPDATE jobs SET started_at = now() WHERE status = 'running' AND reserved_for = :id AND locked_by = :lb"),
-        {"id": w.id, "lb": f"{w.name}@{instance}"},
-    )
+    for table in ("jobs", "tasks"):
+        session.execute(
+            text(f"UPDATE {table} SET started_at = now() WHERE status = 'running' AND reserved_for = :id AND locked_by = :lb"),
+            {"id": w.id, "lb": f"{w.name}@{instance}"},
+        )
 
 
 def merged(w: Worker) -> dict[str, Any]:
     """Union des instances vivantes : extracteurs, modeles, versions, rang VLM."""
     now = datetime.now(timezone.utc)
     extractors: list[str] = []
+    tasks: list[str] = []
     models: dict[str, str] = {}
     versions: dict[str, int] = {}
     vlm_rank: float | None = None
@@ -177,6 +180,9 @@ def merged(w: Worker) -> dict[str, Any]:
         for e in v.get("extractors", []):
             if e not in extractors:
                 extractors.append(e)
+        for t in v.get("tasks", []):
+            if t not in tasks:
+                tasks.append(t)
         models.update(v.get("models") or {})
         versions.update(v.get("versions") or {})
         if v.get("vlm_rank") is not None:
@@ -184,8 +190,8 @@ def merged(w: Worker) -> dict[str, Any]:
         if v.get("hostname"):
             hosts.add(v["hostname"])
     return {
-        "extractors": extractors, "models": models, "versions": versions, "vlm_rank": vlm_rank,
-        "hosts": sorted(hosts), "online": bool(extractors), "last_seen": last_seen.isoformat() if last_seen else None,
+        "extractors": extractors, "tasks": tasks, "models": models, "versions": versions, "vlm_rank": vlm_rank,
+        "hosts": sorted(hosts), "online": bool(extractors or tasks), "last_seen": last_seen.isoformat() if last_seen else None,
     }
 
 
@@ -277,10 +283,83 @@ def describe(session: Session, w: Worker) -> dict[str, Any]:
         {"id": w.id},
     )
     back = {ex: backlog(session, ex, info["vlm_rank"], int(info["versions"].get(ex, 1))) for ex in info["extractors"]}
+    last_task = session.scalars(select(Task).where(Task.reserved_for == w.id).order_by(Task.created_at.desc()).limit(1)).first()
     return {
         "id": str(w.id), "name": w.name, "created_at": w.created_at.isoformat() if w.created_at else None,
         "revoked": w.revoked_at is not None, **info, "jobs": counts, "done_24h": int(done_24h or 0), "backlog": back,
+        "last_task": _task_out(last_task) if last_task else None,
     }
+
+
+# --------------------------------------------------------------------------- taches de maintenance
+
+TASK_KINDS = ("faces_cluster",)
+
+
+def _task_out(t: Task) -> dict[str, Any]:
+    return {
+        "id": str(t.id), "kind": t.kind, "status": t.status, "result": t.result, "error": t.error,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "finished_at": t.finished_at.isoformat() if t.finished_at else None,
+    }
+
+
+def request_task(session: Session, w: Worker, kind: str, params: dict | None = None) -> Task:
+    """Cree une tache reservee a ce worker. Une seule tache du meme genre en attente ou en cours a la fois."""
+    if kind not in TASK_KINDS:
+        raise ValueError(f"tache inconnue: {kind}")
+    if kind not in merged(w)["tasks"]:
+        raise ValueError(f"le worker {w.name} ne sait pas faire {kind}")
+    existing = session.scalars(select(Task).where(Task.kind == kind, Task.status.in_(("pending", "running")))).first()
+    if existing is not None:
+        if existing.status == "pending":
+            existing.reserved_for = w.id  # pas commencee : c'est le worker demande qui la fera
+        return existing
+    t = Task(kind=kind, params=params or {}, reserved_for=w.id)
+    session.add(t)
+    session.flush()
+    return t
+
+
+def claim_task(session: Session, w: Worker, instance: str, kinds: list[str]) -> Task | None:
+    if not kinds:
+        return None
+    row = session.execute(
+        text(
+            "WITH c AS (SELECT id FROM tasks WHERE status = 'pending' AND reserved_for = :id AND kind = ANY(:kinds) "
+            "ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) "
+            "UPDATE tasks t SET status = 'running', locked_by = :lb, started_at = now() FROM c WHERE t.id = c.id RETURNING t.id"
+        ),
+        {"id": w.id, "kinds": list(kinds), "lb": f"{w.name}@{instance}"},
+    ).first()
+    session.commit()
+    return session.get(Task, row.id) if row else None
+
+
+def owned_task(session: Session, w: Worker, task_id: uuid.UUID) -> Task | None:
+    t = session.get(Task, task_id)
+    if t is None or t.reserved_for != w.id or t.status != "running":
+        return None
+    return t
+
+
+def finish_task(session: Session, t: Task, result: dict | None, error: str | None) -> None:
+    t.status = "failed" if error else "done"
+    t.error = error
+    t.result = result
+    t.locked_by = None
+    t.finished_at = datetime.now(timezone.utc)
+
+
+def reset_stale_tasks(session: Session) -> None:
+    """Meme regle que les jobs : une tache dont le worker ne bat plus depuis WORKER_DEAD_MINUTES repart."""
+    session.execute(
+        text(
+            "UPDATE tasks SET status = 'pending', locked_by = NULL WHERE status = 'running' "
+            "AND started_at < now() - make_interval(mins => :m)"
+        ),
+        {"m": settings.worker_dead_minutes},
+    )
 
 
 def server_config() -> dict[str, Any]:

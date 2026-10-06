@@ -124,6 +124,18 @@ export interface WorkerInfo {
 	jobs: Record<string, Record<string, number>>;
 	done_24h: number;
 	backlog: Record<string, number>;
+	tasks: string[];
+	last_task: TaskInfo | null;
+}
+
+export interface TaskInfo {
+	id: string;
+	kind: string;
+	status: 'pending' | 'running' | 'done' | 'failed';
+	result: Record<string, any> | null;
+	error: string | null;
+	created_at: string | null;
+	finished_at: string | null;
 }
 
 export interface PendingWorker {
@@ -159,6 +171,8 @@ export const api = {
 	revokeWorker: (id: string) => call<any>(`/api/workers/${id}/revoke`, { method: 'POST' }),
 	assign: (id: string, n: number, extractors: string[]) =>
 		call<{ assigned: Record<string, number> }>(`/api/workers/${id}/assign`, { method: 'POST', body: JSON.stringify({ n, extractors }) }),
+	requestTask: (id: string, kind: string) =>
+		call<TaskInfo>(`/api/workers/${id}/tasks`, { method: 'POST', body: JSON.stringify({ kind, params: {} }) }),
 	unassign: (id: string) => call<{ released: number }>(`/api/workers/${id}/unassign`, { method: 'POST' }),
 	facets: () => call<{ types: { value: string; count: number }[]; scenes: { value: string; count: number }[]; decades: { value: string; count: number }[] }>('/api/facets'),
 	photos: (params: Record<string, string | number | undefined>) => {

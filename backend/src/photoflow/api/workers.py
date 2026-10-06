@@ -6,16 +6,19 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+import numpy as np
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from .. import persist as persistence, queue, workers
+from .. import faces_cluster, persist as persistence, queue, workers
+from ..queries import broker as query_broker
 from ..config import settings
 from ..db import get_session
 from ..images import derived_paths, original_path
@@ -60,6 +63,7 @@ class HeartbeatIn(BaseModel):
     instance: str = Field(max_length=200)
     hostname: str | None = Field(default=None, max_length=200)
     extractors: list[str] = Field(default_factory=list, max_length=10)
+    tasks: list[str] = Field(default_factory=list, max_length=10)
     models: dict[str, str | None] = Field(default_factory=dict)
     versions: dict[str, int] = Field(default_factory=dict)
     vlm_rank: float | None = None
@@ -69,6 +73,7 @@ class HeartbeatIn(BaseModel):
 def worker_heartbeat(body: HeartbeatIn, w: Worker = Depends(current_worker), session: Session = Depends(get_session)):
     workers.heartbeat(session, w, body.instance, body.model_dump())
     queue.reset_stale(session)
+    workers.reset_stale_tasks(session)
     rows = session.execute(
         text("SELECT extractor, count(*) FROM jobs WHERE reserved_for = :id AND status = 'pending' GROUP BY 1"), {"id": w.id}
     ).all()
@@ -161,6 +166,113 @@ def worker_release(body: ReleaseIn, w: Worker = Depends(current_worker), session
     return {"released": n}
 
 
+# --------------------------------------------------------------------------- requetes de recherche (cote worker)
+
+@router.get("/api/worker/queries")
+def worker_queries(wait: float = Query(20.0, ge=0, le=30), w: Worker = Depends(current_worker)):
+    """Long-poll : la prochaine requete texte a encoder, ou {query: null} apres `wait` secondes."""
+    q = query_broker.take(wait)
+    return {"query": {"id": q.id, "text": q.text} if q else None}
+
+
+class QueryResultIn(BaseModel):
+    vector: list[float] = Field(max_length=8192)
+
+
+@router.post("/api/worker/queries/{query_id}/result")
+def worker_query_result(query_id: str, body: QueryResultIn, w: Worker = Depends(current_worker)):
+    if len(body.vector) != settings.embedding_dim:
+        raise HTTPException(400, f"{settings.embedding_dim} dimensions attendues")
+    return {"delivered": query_broker.answer(query_id, body.vector)}
+
+
+# --------------------------------------------------------------------------- taches de maintenance (cote worker)
+
+class ClaimTaskIn(BaseModel):
+    instance: str = Field(max_length=200)
+    kinds: list[str] = Field(default_factory=list, max_length=10)
+
+
+@router.post("/api/worker/claim-task")
+def worker_claim_task(body: ClaimTaskIn, w: Worker = Depends(current_worker), session: Session = Depends(get_session)):
+    t = workers.claim_task(session, w, body.instance, [k for k in body.kinds if k in workers.TASK_KINDS])
+    if t is None:
+        return {"task": None}
+    return {"task": {"id": str(t.id), "kind": t.kind, "params": t.params}}
+
+
+@router.get("/api/worker/tasks/{task_id}/data")
+def worker_task_data(task_id: uuid.UUID, w: Worker = Depends(current_worker), session: Session = Depends(get_session)):
+    """Donnees de la tache, en binaire numpy (.npz) : pour faces_cluster, ids des visages et matrice float32."""
+    t = workers.owned_task(session, w, task_id)
+    if t is None:
+        raise HTTPException(404, "tache inconnue ou non detenue par ce worker")
+    if t.kind == "faces_cluster":
+        ids, X = faces_cluster.load_faces(session, float(t.params.get("min_score", 0.6)))
+        buf = io.BytesIO()
+        np.savez(buf, ids=np.array([str(i) for i in ids]), X=X)
+        return Response(buf.getvalue(), media_type="application/octet-stream")
+    raise HTTPException(400, "tache sans donnees")
+
+
+class TaskResultIn(BaseModel):
+    result: dict[str, Any]
+
+
+@router.post("/api/worker/tasks/{task_id}/result")
+def worker_task_result(
+    task_id: uuid.UUID, body: TaskResultIn, background: BackgroundTasks,
+    w: Worker = Depends(current_worker), session: Session = Depends(get_session),
+):
+    t = workers.owned_task(session, w, task_id)
+    if t is None:
+        raise HTTPException(404, "tache inconnue ou non detenue par ce worker")
+    try:
+        if t.kind == "faces_cluster":
+            ids, labels = body.result.get("ids"), body.result.get("labels")
+            if not isinstance(ids, list) or not isinstance(labels, list) or len(ids) != len(labels):
+                raise ValueError("ids et labels de meme longueur attendus")
+            summary = faces_cluster.apply_labels(session, [uuid.UUID(i) for i in ids], labels)
+        else:
+            raise ValueError("tache inconnue")
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        workers.finish_task(session, t, None, f"resultat refuse: {e}"[:2000])
+        session.commit()
+        raise HTTPException(400, str(e)[:300])
+    workers.finish_task(session, t, summary, None)
+    session.commit()
+    # Les series dependent des clusters de visages : on les reconstruit dans la foulee (leger, reste sur le serveur).
+    background.add_task(_rebuild_series, t.id)
+    return {"status": "done", "result": summary}
+
+
+def _rebuild_series(task_id: uuid.UUID) -> None:
+    from .. import series
+    from ..db import session_scope
+
+    try:
+        out = series.build()
+    except Exception as e:  # noqa: BLE001
+        out = {"error": str(e)[:300]}
+    with session_scope() as s:
+        s.execute(text("UPDATE tasks SET result = result || CAST(:r AS jsonb) WHERE id = :id"), {"r": __import__("json").dumps({"series": out}), "id": task_id})
+
+
+class TaskFailIn(BaseModel):
+    error: str = Field(max_length=2000)
+
+
+@router.post("/api/worker/tasks/{task_id}/fail")
+def worker_task_fail(task_id: uuid.UUID, body: TaskFailIn, w: Worker = Depends(current_worker), session: Session = Depends(get_session)):
+    t = workers.owned_task(session, w, task_id)
+    if t is None:
+        raise HTTPException(404)
+    workers.finish_task(session, t, None, body.error)
+    session.commit()
+    return {"status": "failed"}
+
+
 # --------------------------------------------------------------------------- cote interface
 
 @router.get("/api/workers")
@@ -219,6 +331,24 @@ def assign_jobs(worker_id: uuid.UUID, body: AssignIn, session: Session = Depends
     out = workers.assign(session, w, body.extractors, body.n)
     session.commit()
     return {"assigned": out}
+
+
+class TaskIn(BaseModel):
+    kind: str = Field(max_length=32)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/api/workers/{worker_id}/tasks")
+def request_task(worker_id: uuid.UUID, body: TaskIn, session: Session = Depends(get_session)):
+    w = session.get(Worker, worker_id)
+    if w is None or w.revoked_at is not None:
+        raise HTTPException(404)
+    try:
+        t = workers.request_task(session, w, body.kind, body.params)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    session.commit()
+    return workers._task_out(t)
 
 
 @router.post("/api/workers/{worker_id}/unassign")

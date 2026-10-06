@@ -39,6 +39,7 @@ from ..images import SUPPORTED_EXT, derived_paths, open_image, original_path
 from ..models import Caption, Face, Person, Photo, Series
 from ..queue import stats as job_stats
 
+from ..queries import broker as query_broker
 from .workers import router as workers_router
 
 app = FastAPI(title="photoflow", version="0.1.0")
@@ -170,11 +171,24 @@ def _best_title_sql() -> str:
     )
 
 
-def vector_search_available() -> bool:
-    """La recherche par texte dans l'espace SigLIP encode la requete dans l'API : il faut torch (image ML=1)."""
+def local_encoder_available() -> bool:
+    """L'API peut encoder elle-meme une requete texte si torch est installe (image ML=1)."""
     import importlib.util
 
-    return importlib.util.find_spec("torch") is not None
+    return not settings.query_via_workers and importlib.util.find_spec("torch") is not None
+
+
+def vector_search_available(session: Session) -> bool:
+    """Localement, ou via un worker en ligne qui a le modele d'embedding charge (serveur sans modeles)."""
+    if local_encoder_available():
+        return True
+    from .. import workers as wk
+    from ..models import Worker
+
+    for w in session.scalars(select(Worker).where(Worker.revoked_at.is_(None))).all():
+        if "embedding" in wk.merged(w)["extractors"]:
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------- routes
@@ -197,7 +211,7 @@ def stats(session: Session = Depends(get_session)):
         "photos": photos, "photos_with_caption": captions, "faces": faces, "persons": persons,
         "face_clusters": clusters, "jobs": job_stats(session),
         "config": {"embedding_model": settings.embedding_model, "vlm_backend": settings.vlm_backend,
-                   "vector_search": vector_search_available()},
+                   "vector_search": vector_search_available(session)},
     }
 
 
@@ -231,11 +245,17 @@ def list_photos(
         where.append("p.nudity_level IN ('suggestive', 'partielle', 'integrale')")
 
     if q and mode == "vector":
-        if not vector_search_available():
-            raise HTTPException(400, "recherche semantique indisponible sur ce serveur (image sans modeles)")
-        from ..extractors.embedding import SiglipEncoder
+        if local_encoder_available():
+            from ..extractors.embedding import SiglipEncoder
 
-        vec = SiglipEncoder.get().encode_texts([q])[0].tolist()
+            vec = SiglipEncoder.get().encode_texts([q])[0].tolist()
+        else:
+            # Pas de modele ici : un worker en ligne encode la requete (queries.py).
+            vec = query_broker.ask(q, timeout=settings.query_timeout_seconds)
+            if vec is None:
+                raise HTTPException(503, "recherche semantique indisponible : aucun worker avec le modele d'embedding en ligne")
+            if len(vec) != settings.embedding_dim:
+                raise HTTPException(502, "vecteur de requete invalide")
         params["vec"] = str(vec)
         sql = f"""
             SELECT p.*, {_best_title_sql()} AS title, 1 - (e.embedding <=> CAST(:vec AS vector)) AS score

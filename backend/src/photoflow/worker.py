@@ -104,6 +104,30 @@ class LocalSource:
 
 # --------------------------------------------------------------------------- serveur distant
 
+def task_kinds() -> list[str]:
+    """Taches de maintenance que cette machine sait faire (faces_cluster si scikit-learn est installe)."""
+    import importlib.util
+
+    return ["faces_cluster"] if importlib.util.find_spec("sklearn") is not None else []
+
+
+def run_task(kind: str, params: dict, data: bytes) -> dict:
+    """Calcul pur d'une tache, a partir des donnees envoyees par le serveur."""
+    import io
+
+    import numpy as np
+
+    if kind == "faces_cluster":
+        from .faces_cluster import cluster_labels
+
+        npz = np.load(io.BytesIO(data), allow_pickle=False)
+        labels = cluster_labels(
+            npz["X"], int(params.get("min_cluster_size", 3)), params.get("min_samples"), float(params.get("epsilon", 0.0))
+        )
+        return {"ids": [str(i) for i in npz["ids"]], "labels": [int(x) for x in labels]}
+    raise ValueError(f"tache inconnue: {kind}")
+
+
 class RemoteSource:
     def __init__(self, server_url: str, token: str, instance: str) -> None:
         self.base = server_url.rstrip("/")
@@ -136,6 +160,7 @@ class RemoteSource:
 
         self._info.update(
             extractors=list(loaded),
+            tasks=task_kinds(),
             models={n: ex.model_name for n, ex in loaded.items()},
             versions={n: ex.version for n, ex in loaded.items()},
             vlm_rank=(settings.vlm_rank if settings.vlm_rank is not None else rank_of_model(loaded["vlm"].model_name)) if "vlm" in loaded else None,
@@ -143,6 +168,26 @@ class RemoteSource:
         self._beat()
         self._thread = threading.Thread(target=self._loop, name="heartbeat", daemon=True)
         self._thread.start()
+        if "embedding" in loaded:
+            # Le serveur n'a pas le modele : on encode pour lui les requetes de recherche semantique (long-poll).
+            threading.Thread(target=self._queries_loop, args=(loaded["embedding"],), name="queries", daemon=True).start()
+
+    def _queries_loop(self, ex) -> None:
+        while not self._stop.is_set():
+            try:
+                r = self.http.get("/api/worker/queries", params={"wait": 20}, timeout=40.0)
+                if r.status_code == 401:
+                    self.unauthorized = True
+                    return
+                r.raise_for_status()
+                q = r.json().get("query")
+                if not q:
+                    continue
+                vec = ex.encoder.encode_texts([q["text"]])[0].tolist()
+                self.http.post(f"/api/worker/queries/{q['id']}/result", json={"vector": vec}, timeout=30.0)
+            except Exception as e:  # noqa: BLE001
+                log.warning("requetes de recherche: %s", e)
+                self._stop.wait(5)
 
     def _beat(self) -> None:
         try:
@@ -219,6 +264,44 @@ class RemoteSource:
                 time.sleep(5)
         log.error("resultat %s perdu ; le job sera remis en file par le serveur", item.job_id)
 
+    def run_tasks(self) -> int:
+        """Reclame et execute au plus une tache de maintenance. Renvoie 1 si une tache a ete traitee."""
+        kinds = self._info.get("tasks") or []
+        if not kinds:
+            return 0
+        try:
+            r = self.http.post("/api/worker/claim-task", json={"instance": self.instance, "kinds": kinds})
+            if r.status_code == 401:
+                raise Unauthorized
+            r.raise_for_status()
+            task = r.json().get("task")
+        except Unauthorized:
+            raise
+        except Exception as e:
+            log.warning("claim-task impossible: %s", e)
+            return 0
+        if not task:
+            return 0
+        tid, kind = task["id"], task["kind"]
+        t0 = time.time()
+        try:
+            data = self.http.get(f"/api/worker/tasks/{tid}/data", timeout=600.0)
+            data.raise_for_status()
+            result = run_task(kind, task.get("params") or {}, data.content)
+            r = self.http.post(f"/api/worker/tasks/{tid}/result", json={"result": result}, timeout=600.0)
+            if r.status_code == 400:
+                log.error("tache %s refusee par le serveur: %s", kind, r.text[:300])
+            else:
+                r.raise_for_status()
+                log.info("tache %s terminee en %.1fs : %s", kind, time.time() - t0, r.json().get("result"))
+        except Exception as e:  # noqa: BLE001
+            log.exception("echec tache %s", kind)
+            try:
+                self.http.post(f"/api/worker/tasks/{tid}/fail", json={"error": f"{type(e).__name__}: {e}"[:2000]})
+            except Exception:
+                pass
+        return 1
+
     def stop(self) -> None:
         self._stop.set()
         try:
@@ -272,6 +355,8 @@ def _serve(loaded: dict[str, extractors.Extractor], source: JobSource, once: boo
             if remote is not None and remote.unauthorized:
                 raise Unauthorized
             n = run_once(loaded, source)
+            if remote is not None:
+                n += remote.run_tasks()
             if once and n == 0:
                 return
             if n == 0:

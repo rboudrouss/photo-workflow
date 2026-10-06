@@ -1,8 +1,9 @@
 # Deploiement COOLIFY du serveur de coordination (photoflow.rboud.com). Voir docs/deploy.md.
 #
 # Ce serveur ne calcule RIEN : l'image backend est construite sans modeles (ML=0, pas de torch), il n'y a ni
-# worker ni llama.cpp, et la recherche semantique par texte est desactivee. Tout le calcul vient des workers
-# distants (docker-compose.worker.yml) qui s'appairent depuis la page Workers.
+# worker ni llama.cpp. Tout le calcul vient des workers distants (docker-compose.worker.yml) qui s'appairent
+# depuis la page Workers ; meme l'encodage d'une requete de recherche semantique leur est delegue (queries.py),
+# la recherche n'est donc disponible que si un worker avec le modele d'embedding est en ligne.
 #
 # Une seule origine publique : le service web (Node) relaie /api et /media vers l'API interne et porte le mot
 # de passe (UI_USER / UI_PASSWORD), sauf /api/worker/* reserve aux workers (jeton). L'API n'est pas exposee.

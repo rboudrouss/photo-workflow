@@ -72,7 +72,10 @@ class Settings(BaseSettings):
     # Rang declare du VLM local (modelrank.py). Deduit du nom du modele si absent.
     vlm_rank: float | None = None
 
-    # API
+    # API : attente max d'un worker pour encoder une requete de recherche semantique (serveur sans modeles).
+    query_timeout_seconds: float = 8.0
+    # Toujours faire encoder les requetes par un worker, meme si torch est installe ici (machine faible).
+    query_via_workers: bool = False
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"])
 
     @property

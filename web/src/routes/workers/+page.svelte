@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type PendingWorker, type WorkerInfo } from '$lib/api';
+	import { api, type PendingWorker, type TaskInfo, type WorkerInfo } from '$lib/api';
 
 	let workers = $state<WorkerInfo[]>([]);
 	let pendingList = $state<PendingWorker[]>([]);
@@ -66,6 +66,24 @@
 		} catch (e: any) {
 			error = e.message;
 		}
+	}
+
+	async function clusterFaces(w: WorkerInfo) {
+		try {
+			await api.requestTask(w.id, 'faces_cluster');
+			await load();
+		} catch (e: any) {
+			error = e.message;
+		}
+	}
+	function taskLine(t: TaskInfo | null): string {
+		if (!t) return '';
+		if (t.status === 'pending') return 'regroupement des visages : en attente du worker';
+		if (t.status === 'running') return 'regroupement des visages : en cours';
+		if (t.status === 'failed') return `regroupement des visages : echec (${t.error})`;
+		const r = t.result ?? {};
+		const s = r.series ?? {};
+		return `visages regroupes le ${ago(t.finished_at)} : ${r.faces} visages, ${r.clusters} groupes` + (s.series != null ? ` · ${s.series} series (${s.grouped_photos} photos)` : s.error ? ` · series : ${s.error}` : ' · series en cours');
 	}
 
 	async function giveBack(w: WorkerInfo) {
@@ -164,6 +182,14 @@
 					<span class="muted">{running(w)} en cours · {w.done_24h} faites ces 24 h{busy && busy !== w.id ? ` · reserve : ${busy}` : ''}</span>
 					<button class="link" onclick={() => forget(w)}>Oublier</button>
 				</div>
+				{#if w.tasks.includes('faces_cluster')}
+					<div class="actions task">
+						<button onclick={() => clusterFaces(w)} disabled={w.last_task?.status === 'pending' || w.last_task?.status === 'running'}>
+							Regrouper les visages et reconstruire les series
+						</button>
+						<span class="muted">{taskLine(w.last_task)}</span>
+					</div>
+				{/if}
 			{:else}
 				<p class="muted">
 					Lance le worker sur la machine pour le voir apparaitre.
@@ -189,5 +215,6 @@
 	table.ex { border-collapse: collapse; margin: 0.4rem 0 0.6rem; }
 	.ex td, .ex th { padding: 0.25rem 0.8rem 0.25rem 0; border-bottom: 1px solid #333; text-align: left; font-size: 0.9rem; }
 	.actions { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; }
+	.actions.task { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #2a2a2a; }
 	code { background: #222; padding: 0 0.3rem; border-radius: 3px; }
 </style>

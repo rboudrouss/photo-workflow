@@ -106,6 +106,14 @@ Principes :
 - **Plusieurs processus, un jeton** : worker-ml et worker-vlm d'une même machine partagent le jeton ; le serveur
   fusionne leurs battements (`workers.instances`). Le modèle d'embedding est imposé par le serveur au premier
   battement, pour que tous les vecteurs soient comparables.
+- **Tâches de maintenance** (`tasks`, `workers.request_task`) : le regroupement des visages est trop lourd pour
+  le serveur à partir de quelques dizaines de milliers de visages. Le bouton de la page Workers crée une tâche
+  `faces_cluster` réservée à un worker ; il télécharge les vecteurs en `.npz`, calcule HDBSCAN, renvoie les
+  étiquettes ; le serveur les applique en une requête, propage les personnes nommées et reconstruit les séries
+  en arrière-plan (`series.build`, léger). Même bail et même reprise que les jobs.
+- **Requêtes de recherche sémantique** : quand l'API n'a pas torch (serveur de coordination), elle dépose la
+  requête texte dans une file en mémoire (`queries.py`) ; un worker en ligne avec le modèle d'embedding la prend
+  en long-poll, l'encode et renvoie le vecteur. Latence de l'ordre de 100 ms, 503 après 8 s sans réponse.
 - Les workers branchés directement sur la base (grosse machine) continuent de prendre la file commune
   (`reserved_for IS NULL`) ; les deux modes coexistent.
 

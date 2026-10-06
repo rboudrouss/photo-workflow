@@ -9,10 +9,12 @@ et partagé : il coordonne, il ne calcule pas.
 
 - l'image backend est construite avec `ML=0` : ni torch, ni InsightFace, ni NudeNet. Un extracteur ne peut
   même pas s'importer, donc aucune analyse ne peut démarrer là, quelle que soit la commande lancée. Seul
-  scikit-learn est présent, pour `faces cluster` et `series build` qui travaillent sur les vecteurs déjà en base ;
+  scikit-learn est présent pour `photoflow faces cluster` en dépannage, mais le regroupement normal est délégué aux workers (voir plus bas) ;
 - pas de service worker ni llama.cpp dans le compose ;
-- la recherche sémantique par texte, qui encoderait la requête avec SigLIP dans l'API, est désactivée
-  (l'option disparaît de l'interface, l'API répond 400) ;
+- la recherche sémantique par texte reste disponible dans l'interface, mais l'encodage de la requête (SigLIP)
+  est fait par un worker en ligne qui a le modèle d'embedding chargé : il attend les requêtes en long-poll et
+  répond en quelques dizaines de millisecondes (`queries.py`). Sans worker en ligne, l'option disparaît de
+  l'interface et l'API répond 503 ;
 - limites mémoire par conteneur : 768 Mo Postgres, 512 Mo API, 256 Mo watcher, 256 Mo web.
 
 Le calcul vient des machines perso (`docker-compose.worker.yml`), approuvées depuis la page Workers.
@@ -75,6 +77,8 @@ photos ajoutées depuis la page « Ajouter » vont dans le volume `photoflow-dat
 
 - sur une machine perso : `docker compose -f docker-compose.worker.yml up -d --build`, puis « Approuver » sur
   la page Workers ;
-- `faces cluster` et `series build` se lancent dans le terminal du conteneur `api` (Coolify → ressource →
-  Terminal), ou en tâche planifiée Coolify sur ce conteneur : `photoflow faces cluster && photoflow series build`.
-  Ordre de grandeur : quelques secondes pour mille photos, quelques minutes pour cent mille.
+- le regroupement des visages (HDBSCAN, lourd : minutes de CPU à 20 000 visages) est une **tâche déléguée à un
+  worker** : bouton « Regrouper les visages et reconstruire les séries » sur la page Workers. Le serveur envoie
+  les vecteurs, le worker calcule, le serveur applique les étiquettes puis reconstruit les séries lui-même
+  (léger : requêtes pgvector, de l'ordre de la minute à 10 000 photos). `photoflow faces cluster` et
+  `photoflow series build` restent utilisables depuis une machine connectée à la base.
