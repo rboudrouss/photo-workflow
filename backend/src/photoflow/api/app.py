@@ -19,6 +19,8 @@ Routes principales :
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import io
 import uuid
 from pathlib import Path
@@ -234,42 +236,86 @@ _DESCRIBED_FIRST = (
 )
 
 
+# Tags compares sous forme normalisee : sans casse, sans accents, "_" et "-" comme espaces. Ainsi
+# "République française", "republique_francaise" et "republique francaise" sont le meme tag.
+_TAG_FROM = "àáâäãåçèéêëìíîïñòóôöõùúûüýÿœæ_-"
+_TAG_TO = "aaaaaaceeeeiiiinooooouuuuyyoa  "
+
+
+def _norm_tag_sql(expr: str) -> str:
+    return f"btrim(translate(lower({expr}), '{_TAG_FROM}', '{_TAG_TO}'))"
+
+
+def norm_tag(t: str) -> str:
+    return t.lower().translate(str.maketrans(_TAG_FROM, _TAG_TO)).strip()
+
+
+# Un tag correspond a une photo si l'une de ses legendes le porte.
+_HAS_TAG = (
+    "EXISTS (SELECT 1 FROM captions c, jsonb_array_elements_text(c.data->'tags') t "
+    f"WHERE c.photo_id = p.id AND {_norm_tag_sql('t')} = {{param}})"
+)
+
+
+@dataclass
+class PhotoFilters:
+    """Filtres de la grille, partages par /api/photos et /api/tags (suggestions dans les resultats courants)."""
+
+    q: str | None = None
+    mode: Literal["text", "vector"] = "text"
+    scene: str | None = None
+    decade: str | None = None
+    nudity: Literal["all", "exclude", "only"] = "all"
+    type_objet: str | None = None
+    vlm: str | None = None  # "any" : decrite par un VLM, "none" : jamais, sinon une source precise (vlm:llama:...)
+    tag: list[str] = Query(default_factory=list, max_length=20)  # ?tag=a&tag=b : toutes requises
+
+    def where(self, params: dict, text_query: bool = True) -> list[str]:
+        where = ["p.status = 'ready'"]
+        if self.scene:
+            where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->>'scene' = :scene)")
+            params["scene"] = self.scene
+        if self.decade:
+            where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->'epoque'->>'decennie' = :decade)")
+            params["decade"] = self.decade
+        if self.type_objet:
+            where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->>'type_objet' = :type_objet)")
+            params["type_objet"] = self.type_objet
+        if self.vlm == "any":
+            where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
+        elif self.vlm == "none":
+            where.append("NOT EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
+        elif self.vlm:
+            where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source = :vlm)")
+            params["vlm"] = self.vlm
+        if self.nudity == "exclude":
+            where.append("coalesce(p.nudity_level, 'aucune') = 'aucune'")
+        elif self.nudity == "only":
+            where.append("p.nudity_level IN ('suggestive', 'partielle', 'integrale')")
+        for i, t in enumerate(dict.fromkeys(norm_tag(t) for t in self.tag if t.strip())):
+            where.append(_HAS_TAG.format(param=f":tag{i}"))
+            params[f"tag{i}"] = t
+        if text_query and self.q and self.mode == "text":
+            where.append(
+                "(EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND "
+                "(c.tsv @@ websearch_to_tsquery('french', :q) OR c.title ILIKE :like OR c.description ILIKE :like)) "
+                "OR p.filename ILIKE :like)"
+            )
+            params["q"], params["like"] = self.q, f"%{self.q}%"
+        return where
+
+
 @app.get("/api/photos")
 def list_photos(
-    q: str | None = None,
-    mode: Literal["text", "vector"] = "text",
-    scene: str | None = None,
-    decade: str | None = None,
-    nudity: Literal["all", "exclude", "only"] = "all",
-    type_objet: str | None = None,
-    vlm: str | None = None,  # "any" : decrite par un VLM, "none" : jamais, sinon une source precise (vlm:llama:...)
+    f: PhotoFilters = Depends(),
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=500),
     session: Session = Depends(get_session),
 ):
+    q, mode = f.q, f.mode
     offset = (page - 1) * page_size
     params: dict = {"limit": page_size, "offset": offset}
-    where = ["p.status = 'ready'"]
-    if scene:
-        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->>'scene' = :scene)")
-        params["scene"] = scene
-    if decade:
-        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->'epoque'->>'decennie' = :decade)")
-        params["decade"] = decade
-    if type_objet:
-        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->>'type_objet' = :type_objet)")
-        params["type_objet"] = type_objet
-    if vlm == "any":
-        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
-    elif vlm == "none":
-        where.append("NOT EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
-    elif vlm:
-        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source = :vlm)")
-        params["vlm"] = vlm
-    if nudity == "exclude":
-        where.append("coalesce(p.nudity_level, 'aucune') = 'aucune'")
-    elif nudity == "only":
-        where.append("p.nudity_level IN ('suggestive', 'partielle', 'integrale')")
+    where = f.where(params)
 
     if q and mode == "vector":
         if local_encoder_available():
@@ -293,12 +339,6 @@ def list_photos(
         """
         total = None
     elif q:
-        where.append(
-            "(EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND "
-            "(c.tsv @@ websearch_to_tsquery('french', :q) OR c.title ILIKE :like OR c.description ILIKE :like)) "
-            "OR p.filename ILIKE :like)"
-        )
-        params["q"], params["like"] = q, f"%{q}%"
         sql = f"""
             SELECT p.*, {_best_title_sql()} AS title, NULL::float AS score
             FROM photos p WHERE {' AND '.join(where)}
@@ -481,6 +521,38 @@ def facets(session: Session = Depends(get_session)):
         "decades": [{"value": r.k, "count": r.n} for r in decades],
         "nudity": [{"value": r.k, "count": r.n} for r in nudity],
     }
+
+
+@app.get("/api/tags")
+def tags(
+    f: PhotoFilters = Depends(),
+    prefix: str = Query("", max_length=100),
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    """Tags les plus frequents parmi les photos qui passent les filtres (hors tags deja choisis).
+
+    Avec `prefix` : autocompletion (tags contenant le texte, ceux qui commencent par lui d'abord).
+    La recherche semantique n'est pas un filtre : elle est ignoree ici.
+    """
+    pre = norm_tag(prefix)
+    params: dict = {"limit": limit, "prefix": pre, "like": f"%{pre}%"}
+    where = f.where(params, text_query=f.mode == "text")
+    params["chosen"] = list({norm_tag(t) for t in f.tag})
+    # Valeur affichee : la graphie la plus courante du tag normalise (souvent celle avec accents).
+    rows = session.execute(
+        text(f"""
+            SELECT mode() WITHIN GROUP (ORDER BY replace(lower(t), '_', ' ')) AS tag, count(DISTINCT p.id) AS n
+            FROM photos p JOIN captions c ON c.photo_id = p.id, jsonb_array_elements_text(c.data->'tags') t,
+                 LATERAL (SELECT {_norm_tag_sql('t')} AS k) nk
+            WHERE {' AND '.join(where)} AND nk.k <> '' AND nk.k LIKE :like AND NOT (nk.k = ANY(CAST(:chosen AS text[])))
+            GROUP BY nk.k
+            ORDER BY (:prefix <> '' AND nk.k LIKE :prefix || '%') DESC, n DESC, nk.k
+            LIMIT :limit
+        """),
+        params,
+    ).all()
+    return {"items": [{"value": r.tag, "count": r.n} for r in rows]}
 
 
 # --------------------------------------------------------------------------- series

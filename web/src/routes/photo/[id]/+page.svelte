@@ -137,7 +137,7 @@
 							{#if d.interet_vente}<div><span>interet</span>{d.interet_vente} · {d.categorie_delcampe}</div>{/if}
 							{#if d.incertitudes?.length}<div><span>a verifier</span>{d.incertitudes.join('; ')}</div>{/if}
 							{#if d.nudite && d.nudite.niveau !== 'aucune'}<div><span>nudite</span>{d.nudite.niveau} · {d.nudite.contexte} — {d.nudite.explication}</div>{/if}
-							{#if d.tags?.length}<div><span>tags</span>{#each d.tags as t}<span class="tag">{t}</span>{/each}</div>{/if}
+							{#if d.tags?.length}<div><span>tags</span>{#each d.tags as t}<a class="tag" href={`/?tag=${encodeURIComponent(t.toLowerCase())}`} title="Voir les photos avec ce tag">{t}</a>{/each}</div>{/if}
 						</div>
 					{/if}
 				</details>

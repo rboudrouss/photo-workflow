@@ -177,6 +177,18 @@ export async function upload(files: File[]): Promise<UploadItem[]> {
 	return ((await r.json()) as { items: UploadItem[] }).items;
 }
 
+type QueryParams = Record<string, string | number | string[] | undefined>;
+
+/** Parametres de requete ; un tableau devient un parametre repete (?tag=a&tag=b). Les valeurs vides sont omises. */
+function query(params: QueryParams): URLSearchParams {
+	const q = new URLSearchParams();
+	for (const [k, v] of Object.entries(params)) {
+		if (Array.isArray(v)) for (const x of v) q.append(k, x);
+		else if (v !== undefined && v !== '') q.set(k, String(v));
+	}
+	return q;
+}
+
 /** Taille de page de la grille des photos. */
 export const PAGE_SIZE = 60;
 
@@ -193,11 +205,10 @@ export const api = {
 		call<TaskInfo>(`/api/workers/${id}/tasks`, { method: 'POST', body: JSON.stringify({ kind, params: {} }) }),
 	unassign: (id: string) => call<{ released: number }>(`/api/workers/${id}/unassign`, { method: 'POST' }),
 	facets: () => call<Facets>('/api/facets'),
-	photos: (params: Record<string, string | number | undefined>) => {
-		const q = new URLSearchParams();
-		for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') q.set(k, String(v));
-		return call<{ items: PhotoSummary[]; page: number; page_size: number; total: number | null }>('/api/photos?' + q);
-	},
+	photos: (params: QueryParams) =>
+		call<{ items: PhotoSummary[]; page: number; page_size: number; total: number | null }>('/api/photos?' + query(params)),
+	/** Tags frequents parmi les photos qui passent les filtres ; avec `prefix`, autocompletion. */
+	tags: (params: QueryParams) => call<{ items: Facet[] }>('/api/tags?' + query(params)),
 	photo: (id: string) => call<PhotoDetail>(`/api/photos/${id}`),
 	saveCaption: (id: string, body: { title?: string; description?: string; data?: any }) =>
 		call<Caption>(`/api/photos/${id}/caption`, { method: 'PUT', body: JSON.stringify(body) }),

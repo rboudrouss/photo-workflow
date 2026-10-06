@@ -15,12 +15,16 @@ export const load: PageLoad = async ({ url }) => {
 		nudity: (get('nudity') || 'all') as 'all' | 'exclude' | 'only',
 		type_objet: get('type_objet'),
 		vlm: get('vlm'),
+		tag: url.searchParams.getAll('tag'),
 		page: Math.max(1, Number(get('page')) || 1)
 	};
+	// Tags pour affiner : les plus frequents dans les resultats courants (facultatif, ne bloque pas la grille).
+	const { page, ...filters } = params;
+	const refine = api.tags({ ...filters, limit: 15 }).then((r) => r.items, () => []);
 	try {
 		const r = await api.photos({ ...params, page_size: PAGE_SIZE });
-		return { params, items: r.items, total: r.total, error: '' };
+		return { params, filters, items: r.items, total: r.total, refine: await refine, error: '' };
 	} catch (e: any) {
-		return { params, items: [], total: null, error: e.message as string };
+		return { params, filters, items: [], total: null, refine: [], error: e.message as string };
 	}
 };

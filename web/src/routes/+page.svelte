@@ -4,6 +4,7 @@
 	import { navigating } from '$app/state';
 	import { api, media, isExplicit, PAGE_SIZE, type Facets } from '$lib/api';
 	import { blur } from '$lib/blur.svelte';
+	import TagFilter from '$lib/TagFilter.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -16,13 +17,17 @@
 	let nudity = $state<'all' | 'exclude' | 'only'>('all');
 	let typeObjet = $state('');
 	let vlm = $state('');
+	let tags = $state<string[]>([]);
 	$effect.pre(() => {
 		({ q, mode, scene, decade, nudity, vlm } = data.params);
 		typeObjet = data.params.type_objet;
+		tags = data.params.tag;
 	});
 
 	let vectorSearch = $state(true);
 	let facets = $state<Facets>({ types: [], scenes: [], decades: [], vlm: [] });
+	// Un tag porte par toutes les photos affichees ne filtrerait rien : on ne le propose pas.
+	let refine = $derived(data.refine.filter((t) => data.total === null || t.count < data.total));
 	let loading = $derived(navigating.to?.url.pathname === '/');
 
 	function go(page: number) {
@@ -30,6 +35,7 @@
 		const defaults: Record<string, string> = { mode: 'text', nudity: 'all', page: '1' };
 		const u = new URLSearchParams();
 		for (const [k, v] of Object.entries(params)) if (v && v !== defaults[k]) u.set(k, v);
+		for (const t of tags) u.append('tag', t);
 		const qs = u.toString();
 		goto(qs ? `/?${qs}` : '/', { keepFocus: true });
 	}
@@ -71,15 +77,25 @@
 		<option value="exclude">sans nudite</option>
 		<option value="only">nudite seulement</option>
 	</select>
-	<select bind:value={vlm} onchange={search}>
+	<select bind:value={vlm} onchange={search} class="narrow">
 		<option value="">description : toutes</option>
 		<option value="any">decrites par un VLM</option>
 		<option value="none">jamais decrites</option>
 		{#each facets.vlm as f}<option value={f.value}>par {f.value.replace(/^vlm:/, '')} ({f.count})</option>{/each}
 	</select>
+	<TagFilter selected={tags} filters={data.filters} onchange={(t) => { tags = t; go(1); }} />
 	<button type="submit">Chercher</button>
 	<span class="muted">{data.total !== null ? `${data.total} photo(s)` : ''}{loading ? ' …' : ''}</span>
 </form>
+
+{#if refine.length}
+	<div class="refine">
+		<span class="muted">Affiner :</span>
+		{#each refine as t (t.value)}
+			<button type="button" class="tag" onclick={() => { tags = [...tags, t.value]; go(1); }}>{t.value} <span class="muted">{t.count}</span></button>
+		{/each}
+	</div>
+{/if}
 
 {#if data.error}<p style="color:#f66">{data.error}</p>{/if}
 
@@ -111,6 +127,23 @@
 		flex-wrap: wrap;
 		align-items: center;
 		margin-bottom: 1rem;
+	}
+	.narrow {
+		max-width: 14rem;
+	}
+	.refine {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.2rem;
+		margin: -0.4rem 0 0.8rem;
+	}
+	.refine .tag {
+		border: none;
+		cursor: pointer;
+	}
+	.refine .tag:hover {
+		background: #2d4a63;
 	}
 	.pager {
 		display: flex;
