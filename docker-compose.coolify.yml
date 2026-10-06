@@ -96,8 +96,8 @@ services:
       - SERVICE_FQDN_WEB_3000
       - API_INTERNAL=http://api:8000
       - PUBLIC_API_BASE=
-      # Origine vue du navigateur, pour le controle anti-CSRF ; sinon deduite de x-forwarded-proto/host (Traefik).
-      - ORIGIN=${SERVICE_FQDN_WEB}
+      # Origine vue du navigateur (controle anti-CSRF, URLs absolues) deduite des en-tetes poses par Traefik.
+      # Ne pas utiliser ORIGIN=${SERVICE_FQDN_WEB} : Coolify fournit le domaine sans schema et Node le refuse.
       - PROTOCOL_HEADER=x-forwarded-proto
       - HOST_HEADER=x-forwarded-host
       - UI_USER=${UI_USER:-photoflow}
