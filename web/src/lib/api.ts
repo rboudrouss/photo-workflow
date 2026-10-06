@@ -111,8 +111,38 @@ export interface Cluster {
 	samples: string[];
 }
 
+export interface WorkerInfo {
+	id: string;
+	name: string;
+	online: boolean;
+	last_seen: string | null;
+	hosts: string[];
+	extractors: string[];
+	models: Record<string, string | null>;
+	versions: Record<string, number>;
+	vlm_rank: number | null;
+	jobs: Record<string, Record<string, number>>;
+	done_24h: number;
+	backlog: Record<string, number>;
+}
+
+export interface PendingWorker {
+	code: string;
+	hostname: string | null;
+	extractors: string[];
+	since: string;
+}
+
 export const api = {
 	stats: () => call<any>('/api/stats'),
+	workers: () => call<{ workers: WorkerInfo[]; pending: PendingWorker[] }>('/api/workers'),
+	approveWorker: (code: string, name: string) =>
+		call<{ id: string; name: string }>('/api/workers/approve', { method: 'POST', body: JSON.stringify({ code, name }) }),
+	rejectWorker: (code: string) => call<any>(`/api/workers/pending/${code}`, { method: 'DELETE' }),
+	revokeWorker: (id: string) => call<any>(`/api/workers/${id}/revoke`, { method: 'POST' }),
+	assign: (id: string, n: number, extractors: string[]) =>
+		call<{ assigned: Record<string, number> }>(`/api/workers/${id}/assign`, { method: 'POST', body: JSON.stringify({ n, extractors }) }),
+	unassign: (id: string) => call<{ released: number }>(`/api/workers/${id}/unassign`, { method: 'POST' }),
 	facets: () => call<{ types: { value: string; count: number }[]; scenes: { value: string; count: number }[]; decades: { value: string; count: number }[] }>('/api/facets'),
 	photos: (params: Record<string, string | number | undefined>) => {
 		const q = new URLSearchParams();

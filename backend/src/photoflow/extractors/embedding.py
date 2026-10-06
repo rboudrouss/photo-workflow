@@ -11,11 +11,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
-
 from ..config import settings
-from ..models import ImageEmbedding
 from .base import Extractor, PhotoRef
 
 log = logging.getLogger(__name__)
@@ -74,7 +70,6 @@ class EmbeddingExtractor(Extractor):
     def __init__(self) -> None:
         self.model_name = settings.embedding_model
         self.encoder = SiglipEncoder.get()
-        self._last: dict = {}
 
     def run(self, photos: list[PhotoRef]) -> list[dict[str, Any]]:
         imgs = [Image.open(p.web).convert("RGB") for p in photos]
@@ -83,14 +78,4 @@ class EmbeddingExtractor(Extractor):
             raise RuntimeError(
                 f"EMBEDDING_DIM={settings.embedding_dim} mais le modele produit {vecs.shape[1]} dimensions"
             )
-        self._last = {p.id: v for p, v in zip(photos, vecs)}
-        return [{"model": self.model_name, "dim": int(vecs.shape[1])} for _ in photos]
-
-    def persist(self, session: Session, photo: PhotoRef, result: dict[str, Any]) -> None:
-        vec = self._last[photo.id]
-        stmt = insert(ImageEmbedding).values(photo_id=photo.id, model=self.model_name, embedding=vec.tolist())
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[ImageEmbedding.photo_id], set_={"model": self.model_name, "embedding": vec.tolist()}
-        )
-        session.execute(stmt)
-        super().persist(session, photo, result)
+        return [{"model": self.model_name, "dim": int(vecs.shape[1]), "vector": v.tolist()} for v in vecs]

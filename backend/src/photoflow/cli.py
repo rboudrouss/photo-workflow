@@ -20,6 +20,8 @@ faces_app = typer.Typer(help="Visages.")
 vlm_app = typer.Typer(help="Modele vision-langage.")
 batch_app = typer.Typer(help="API Batches Anthropic.")
 series_app = typer.Typer(help="Series (meme pellicule / meme seance).")
+workers_app = typer.Typer(help="Workers distants (jetons).")
+app.add_typer(workers_app, name="workers")
 app.add_typer(db_app, name="db")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(faces_app, name="faces")
@@ -61,11 +63,56 @@ def ingest(
 def worker(
     extractors: str = typer.Option(",".join(["physical", "embedding", "faces", "nudity", "vlm"]), help="Extracteurs geres par ce worker."),
     once: bool = typer.Option(False, help="S'arreter quand la file est vide."),
+    server: Optional[str] = typer.Option(None, help="URL du serveur photoflow (mode distant, sinon SERVER_URL)."),
+    token: Optional[str] = typer.Option(None, help="Jeton du worker (sinon WORKER_TOKEN)."),
 ):
-    """Lance un worker qui traite les jobs des extracteurs donnes."""
+    """Lance un worker. Avec --server/SERVER_URL : mode distant, sans acces a la base."""
     from .worker import main
 
-    main([e.strip() for e in extractors.split(",") if e.strip()], once=once)
+    main([e.strip() for e in extractors.split(",") if e.strip()], once=once, server_url=server, token=token)
+
+
+@workers_app.command("create")
+def workers_create(name: str = typer.Argument(..., help="Nom du worker, ex. pc-remi.")):
+    """Cree un worker distant et affiche son jeton (une seule fois : il n'est stocke que hache)."""
+    from .db import session_scope
+    from .workers import create
+
+    with session_scope() as s:
+        w, token = create(s, name)
+    rprint(f"worker [bold]{name}[/bold] cree. A mettre dans le .env de la machine du worker :")
+    rprint(f"  SERVER_URL=https://photoflow.example.com\n  WORKER_TOKEN={token}")
+
+
+@workers_app.command("list")
+def workers_list():
+    from sqlalchemy import select
+
+    from .db import session_scope
+    from .models import Worker
+    from .workers import describe
+
+    t = Table("nom", "en ligne", "extracteurs", "VLM", "rang", "jobs", "vu")
+    with session_scope() as s:
+        for w in s.scalars(select(Worker).order_by(Worker.name)).all():
+            d = describe(s, w)
+            jobs = "; ".join(f"{ex}: " + ", ".join(f"{n} {st}" for st, n in c.items()) for ex, c in d["jobs"].items()) or "-"
+            t.add_row(
+                w.name + (" (revoque)" if d["revoked"] else ""), "oui" if d["online"] else "non", ",".join(d["extractors"]) or "-",
+                d["models"].get("vlm") or "-", str(d["vlm_rank"] or "-"), jobs, (d["last_seen"] or "-")[:16],
+            )
+    rprint(t)
+
+
+@workers_app.command("revoke")
+def workers_revoke(name: str):
+    """Invalide le jeton d'un worker et rend ses jobs en attente a la file commune."""
+    from .db import session_scope
+    from .workers import revoke
+
+    with session_scope() as s:
+        ok = revoke(s, name)
+    rprint("[green]revoque[/green]" if ok else "[red]worker inconnu[/red]")
 
 
 @jobs_app.command("stats")

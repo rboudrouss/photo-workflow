@@ -38,6 +38,8 @@ photoflow jobs stats                        # état de la file
 photoflow jobs enqueue vlm --force          # relancer un extracteur sur tout le fonds
 photoflow jobs retry-failed
 photoflow worker --extractors embedding,faces
+photoflow worker --server https://photoflow.example.com            # worker distant, sans base (approbation sur le site)
+photoflow workers list / create pc-remi / revoke pc-remi            # workers distants (create = jeton fixe)
 photoflow faces cluster --min-cluster-size 3
 photoflow series build                                # regrouper par pellicule / séance
 photoflow vlm run --backend llama --limit 20          # tester le VLM local sur 20 photos
@@ -49,6 +51,24 @@ photoflow vlm schema                                  # le JSON imposé au modè
 ```
 
 Dans Docker, préfixer par `docker compose -f docker-compose.dev.yml run --rm api`.
+
+## Serveur + workers distants
+
+Le serveur (petite machine publique) coordonne ; des machines perso calculent. Voir « Workers distants » dans
+`docs/architecture.md`.
+
+```bash
+# serveur (DOMAIN, UI_PASSWORD_HASH, POSTGRES_PASSWORD, PHOTOS_DIR dans .env)
+docker compose -f docker-compose.server.yml up -d --build
+docker compose -f docker-compose.server.yml run --rm api photoflow db init
+docker compose -f docker-compose.server.yml run --rm api photoflow ingest /photos
+
+# machine perso : rien à configurer (le serveur par défaut est dans le compose, options dans .env.worker.example)
+docker compose -f docker-compose.worker.yml up -d --build                  # visages, embeddings, nudité, physique
+docker compose -f docker-compose.worker.yml --profile vlm up -d --build    # + VLM local
+```
+
+Puis page « Workers » du site : la machine apparaît en attente, « Approuver », puis « Analyser N photos ».
 
 ## Grosse machine (Spark ou Mac Studio)
 

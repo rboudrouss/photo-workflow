@@ -12,10 +12,9 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..nudity import apply_level, level_from_detections
+from ..nudity import level_from_detections
 from .base import Extractor, PhotoRef
 
 log = logging.getLogger(__name__)
@@ -66,7 +65,3 @@ class NudityExtractor(Extractor):
                 }
             )
         return out
-
-    def persist(self, session: Session, photo: PhotoRef, result: dict[str, Any]) -> None:
-        apply_level(session, photo.id, result["level"], f"nudity:{self.model_name}")
-        super().persist(session, photo, result)

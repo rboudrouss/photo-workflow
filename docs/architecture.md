@@ -38,6 +38,65 @@ en file au démarrage d'un worker.
 Chaque worker ne gère que les extracteurs qu'on lui donne. Cela permet par exemple un worker GPU sur la grosse
 machine pour le VLM et un worker CPU ailleurs pour les visages, ou de couper le VLM sans bloquer le reste.
 
+## Workers distants (calcul décentralisé)
+
+Déploiement visé : un petit serveur public (`docker-compose.server.yml`) porte la base, l'API, l'interface et un
+reverse proxy ; le calcul vient de machines perso qui lancent `docker-compose.worker.yml`.
+
+```
+machine perso (worker)                         serveur photoflow.example.com
+ ┌───────────────────────────┐    HTTPS sortant  ┌──────────────────────────────┐
+ │ worker-ml / worker-vlm    │ ───────────────►  │ Caddy ─► API ─► Postgres      │
+ │ (+ llama.cpp en option)   │  jeton porteur    │   /api/worker/* : jeton       │
+ │ aucun port ouvert         │ ◄───────────────  │   le reste : mot de passe     │
+ └───────────────────────────┘  images, jobs     └──────────────────────────────┘
+                                                        ▲ navigateur : page « Workers »
+```
+
+Principes :
+
+- **Le worker ne fait que des requêtes sortantes.** Il n'expose aucune API locale, donc aucun site ouvert dans
+  le navigateur de la machine ne peut l'atteindre (pas de surface pour un DNS rebinding ou un `fetch` vers
+  `localhost`). Le navigateur ne parle qu'au serveur. L'alternative « la page du site appelle
+  `http://localhost` sur la machine » a été écartée : Safari bloque ce contenu mixte, Chrome demande une
+  permission d'accès au réseau local, et il faudrait de toute façon transmettre un secret au worker.
+- **Appairage en un clic.** Un worker sans jeton se signale au serveur avec un code aléatoire qu'il garde dans
+  son volume (`pairing.py`, route `/api/worker/pair`, sans authentification mais bornée : 50 demandes au plus,
+  expirées après 15 min). La page « Workers » le montre « en attente » ; « Approuver » crée le worker et dépose
+  le jeton sur la demande, le worker le récupère à son passage suivant et le conserve. « Oublier » révoque le
+  jeton : le worker repasse automatiquement en demande d'approbation. `photoflow workers create` reste
+  disponible pour un jeton fixe (`WORKER_TOKEN`) sans passer par l'interface.
+- **Un jeton par worker**, stocké haché, révocable. L'API ne sert à un worker que les jobs qui lui sont réservés
+  et n'accepte un résultat que pour un job qu'il détient. Les résultats sont validés avant écriture (`persist.py` : dimension des vecteurs,
+  schéma de l'analyse VLM, modèle d'embedding identique à celui de la base).
+- **Rien ne tourne sans demande.** Le worker envoie un battement toutes les 30 s avec ses extracteurs, ses
+  modèles et le rang de son VLM. Sur la page « Workers », le bouton « analyser N photos » réserve N jobs par
+  extracteur coché (`jobs.reserved_for`). Le worker les réclame à son prochain passage, télécharge le dérivé
+  web (ou l'original pour les visages des petits scans), calcule, renvoie le JSON **photo par photo, dès
+  qu'elle est calculée**. Le worker interroge le serveur toutes les 3 s (`/api/worker/claim`) : cliquer
+  « analyser » n'envoie rien au worker, ça réserve des jobs qu'il découvre à son passage suivant. Un
+  `docker stop` rend les jobs en cours ; une machine qui meurt sans prévenir voit ses jobs repartir après
+  `WORKER_DEAD_MINUTES` (5) sans battement, toujours réservés à elle. Les jobs réservés non commencés peuvent
+  être rendus ; ils le sont d'office après `WORKER_ABSENT_HOURS` (6) sans battement, et redeviennent alors
+  disponibles pour les autres workers. Ces délais sont vérifiés à chaque battement et à chaque ouverture de la
+  page Workers.
+- **Jamais deux workers sur la même photo** : la réservation est posée par le serveur dans une seule
+  transaction, en excluant les photos déjà réservées ou en cours chez un autre worker, et la réclamation se
+  fait avec `SKIP LOCKED` sur les seuls jobs réservés au demandeur. Deux workers qui demandent le même fonds au
+  même moment se partagent le reste, sans recouvrement.
+- **Choix des photos** (`workers.py`) : pour un extracteur classique, celles sans extraction ou avec une version
+  plus ancienne que celle du worker. Pour le VLM, d'abord les photos sans légende machine, puis celles dont la
+  meilleure légende vient d'un modèle de rang inférieur (`modelrank.py` : `4B` → 4, `32B` → 32, Claude → 1000,
+  `VLM_RANK` pour forcer). Un worker au 4B ne retouche donc jamais une photo déjà vue par le 32B.
+- **Plusieurs processus, un jeton** : worker-ml et worker-vlm d'une même machine partagent le jeton ; le serveur
+  fusionne leurs battements (`workers.instances`). Le modèle d'embedding est imposé par le serveur au premier
+  battement, pour que tous les vecteurs soient comparables.
+- Les workers branchés directement sur la base (grosse machine) continuent de prendre la file commune
+  (`reserved_for IS NULL`) ; les deux modes coexistent.
+
+Le mot de passe de l'interface est géré par Caddy (`deploy/Caddyfile`), pas par l'application : les routes
+`/api/workers/*` (réserver, rendre) sont donc protégées par le même mot de passe que le reste.
+
 ## Ajouter un extracteur
 
 1. Créer `extractors/monextracteur.py` avec une classe héritant de `Extractor` : `name`, `version`,
@@ -54,9 +113,10 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 | Table | Clé | Contenu |
 |---|---|---|
 | `photos` | id | fichier, dimensions, pHash, statut |
-| `jobs` | (photo, extractor) | file de travail |
+| `jobs` | (photo, extractor) | file de travail ; `reserved_for` = worker distant désigné |
+| `workers` | id | worker distant : nom, jeton haché, état de ses instances |
 | `extractions` | (photo, extractor) | JSON brut de chaque extracteur, version, modèle |
-| `captions` | (photo, source) | titre, description, analyse structurée ; `tsv` généré pour le plein texte |
+| `captions` | (photo, source) | titre, description, analyse structurée, `model_rank` ; `tsv` généré pour le plein texte |
 | `image_embeddings` | photo | vecteur SigLIP, index HNSW cosinus |
 | `faces` | id | bbox, score, âge, genre, vecteur ArcFace, cluster, personne |
 | `persons` | id | nom |

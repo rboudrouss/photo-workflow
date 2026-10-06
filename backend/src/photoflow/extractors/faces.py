@@ -10,11 +10,8 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from sqlalchemy import delete
-from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Face
 from .base import Extractor, PhotoRef
 
 log = logging.getLogger(__name__)
@@ -42,12 +39,14 @@ class FaceExtractor(Extractor):
             providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
         self.app = FaceAnalysis(name=self.model_name, root=str(settings.models_dir / "insightface"), providers=providers)
         self.app.prepare(ctx_id=ctx_id, det_size=(settings.face_det_size, settings.face_det_size), det_thresh=settings.face_min_score)
-        self._last: dict = {}
+
+    def needs_original(self, photo: PhotoRef) -> bool:
+        return max(photo.width, photo.height) <= MAX_ORIGINAL_SIDE
 
     def run(self, photos: list[PhotoRef]) -> list[dict[str, Any]]:
         out = []
         for p in photos:
-            use_original = max(p.width, p.height) <= MAX_ORIGINAL_SIDE
+            use_original = self.needs_original(p)
             img = Image.open(p.original if use_original else p.web).convert("RGB")
             scale = p.width / img.width  # facteur pour revenir aux coordonnees de l'original
             bgr = np.asarray(img)[:, :, ::-1].copy()
@@ -66,21 +65,5 @@ class FaceExtractor(Extractor):
                         "embedding": f.normed_embedding.astype(np.float32).tolist(),
                     }
                 )
-            self._last[p.id] = kept
-            out.append({"count": len(kept), "model": self.model_name, "source": "original" if use_original else "web"})
+            out.append({"count": len(kept), "model": self.model_name, "source": "original" if use_original else "web", "faces": kept})
         return out
-
-    def persist(self, session: Session, photo: PhotoRef, result: dict[str, Any]) -> None:
-        session.execute(delete(Face).where(Face.photo_id == photo.id))
-        for f in self._last.get(photo.id, []):
-            session.add(
-                Face(
-                    photo_id=photo.id,
-                    bbox=f["bbox"],
-                    det_score=f["det_score"],
-                    age=f["age"],
-                    gender=f["gender"],
-                    embedding=f["embedding"],
-                )
-            )
-        super().persist(session, photo, result)

@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .models import Job
 
 
@@ -32,25 +33,40 @@ def enqueue(session: Session, photo_ids: Iterable[uuid.UUID], extractors: Iterab
     return len(result.all())
 
 
-CLAIM_SQL = text(
-    """
-    WITH c AS (
-        SELECT id FROM jobs
-        WHERE status = 'pending' AND extractor = :extractor
-        ORDER BY created_at
-        LIMIT :n
-        FOR UPDATE SKIP LOCKED
+def _claim_sql(reserved: bool) -> text:
+    # File commune (reserved_for IS NULL) pour les workers connectes a la base ; jobs reserves pour un
+    # worker distant identifie (reserved_for = :reserved_for).
+    cond = "reserved_for = :reserved_for" if reserved else "reserved_for IS NULL"
+    return text(
+        f"""
+        WITH c AS (
+            SELECT id FROM jobs
+            WHERE status = 'pending' AND extractor = :extractor AND {cond}
+            ORDER BY created_at
+            LIMIT :n
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE jobs j
+        SET status = 'running', locked_by = :worker, started_at = now(), attempts = attempts + 1
+        FROM c WHERE j.id = c.id
+        RETURNING j.id, j.photo_id, j.attempts
+        """
     )
-    UPDATE jobs j
-    SET status = 'running', locked_by = :worker, started_at = now(), attempts = attempts + 1
-    FROM c WHERE j.id = c.id
-    RETURNING j.id, j.photo_id, j.attempts
-    """
-)
 
 
-def claim(session: Session, extractor: str, worker: str, n: int) -> list[tuple[uuid.UUID, uuid.UUID, int]]:
-    rows = session.execute(CLAIM_SQL, {"extractor": extractor, "worker": worker, "n": n}).all()
+CLAIM_POOL_SQL = _claim_sql(reserved=False)
+CLAIM_RESERVED_SQL = _claim_sql(reserved=True)
+
+
+def claim(
+    session: Session, extractor: str, worker: str, n: int, reserved_for: uuid.UUID | None = None
+) -> list[tuple[uuid.UUID, uuid.UUID, int]]:
+    """Reclame jusqu'a n jobs. Sans reserved_for : file commune. Avec : seulement les jobs reserves a ce worker."""
+    params = {"extractor": extractor, "worker": worker, "n": n}
+    if reserved_for is None:
+        rows = session.execute(CLAIM_POOL_SQL, params).all()
+    else:
+        rows = session.execute(CLAIM_RESERVED_SQL, {**params, "reserved_for": reserved_for}).all()
     session.commit()
     return [(r.id, r.photo_id, r.attempts) for r in rows]
 
@@ -68,14 +84,31 @@ def finish(session: Session, job_id: uuid.UUID, error: str | None, attempts: int
     )
 
 
-def reset_stale(session: Session, older_than_minutes: int = 60) -> int:
-    """Remet en pending les jobs 'running' orphelins (worker tue)."""
+def reset_stale(session: Session, older_than_minutes: int = 60, remote_minutes: int | None = None, absent_worker_hours: int | None = None) -> int:
+    """Remet en pending les jobs 'running' orphelins (worker tue).
+
+    Un worker distant rafraichit `started_at` de ses jobs en cours a chaque battement (30 s) : 5 min sans
+    battement = worker mort, le job repart (toujours reserve au meme worker, un autre ne le prendra pas).
+    Un worker connecte a la base ne rafraichit rien, d'ou un delai plus long pour ses jobs (VLM lent).
+    Les jobs reserves a un worker distant absent depuis longtemps (ou revoque) retournent dans la file commune.
+    """
+    remote_minutes = settings.worker_dead_minutes if remote_minutes is None else remote_minutes
+    absent_worker_hours = settings.worker_absent_hours if absent_worker_hours is None else absent_worker_hours
     r = session.execute(
         text(
-            "UPDATE jobs SET status='pending', locked_by=NULL WHERE status='running' "
-            "AND started_at < now() - make_interval(mins => :m)"
+            "UPDATE jobs SET status='pending', locked_by=NULL WHERE status='running' AND ("
+            "(reserved_for IS NULL AND started_at < now() - make_interval(mins => :m)) OR "
+            "(reserved_for IS NOT NULL AND started_at < now() - make_interval(mins => :r)))"
         ),
-        {"m": older_than_minutes},
+        {"m": older_than_minutes, "r": remote_minutes},
+    )
+    session.execute(
+        text(
+            "UPDATE jobs SET reserved_for = NULL WHERE status = 'pending' AND reserved_for IN ("
+            "SELECT id FROM workers WHERE revoked_at IS NOT NULL "
+            "OR last_seen_at IS NULL OR last_seen_at < now() - make_interval(hours => :h))"
+        ),
+        {"h": absent_worker_hours},
     )
     return r.rowcount or 0
 

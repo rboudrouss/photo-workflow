@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True)
 
     database_url: str = "postgresql+psycopg://photoflow:photoflow@localhost:5432/photoflow"
 
@@ -58,6 +58,19 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_seconds: float = 3.0
     worker_max_attempts: int = 3
+
+    # Worker distant (machine perso) : s'il a SERVER_URL + WORKER_TOKEN, il ne touche pas a la base et tire ses
+    # jobs par HTTP (workers.py). Jeton cree sur le serveur avec `photoflow workers create <nom>`.
+    server_url: str | None = None
+    worker_token: str | None = None  # facultatif : sans jeton, le worker demande a etre approuve sur la page Workers
+    worker_name: str | None = None   # nom propose a l'approbation (defaut : hostname)
+    worker_heartbeat_seconds: float = 30.0
+    # Cote serveur : apres WORKER_DEAD_MINUTES sans battement, les jobs en cours d'un worker distant repassent en
+    # attente (toujours reserves a lui) ; apres WORKER_ABSENT_HOURS, ses photos reservees retournent a la file commune.
+    worker_dead_minutes: int = 5
+    worker_absent_hours: int = 6
+    # Rang declare du VLM local (modelrank.py). Deduit du nom du modele si absent.
+    vlm_rank: float | None = None
 
     # API
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"])

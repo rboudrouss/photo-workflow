@@ -8,6 +8,7 @@
 	<a href="/faces">Visages</a>
 	<a href="/series">Séries</a>
 	<a href="/stats">Statut</a>
+	<a href="/workers">Workers</a>
 </nav>
 <main>
 	{@render children()}

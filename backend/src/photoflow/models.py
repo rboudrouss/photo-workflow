@@ -72,6 +72,9 @@ class Caption(Base):
     title: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     data: Mapped[dict | None] = mapped_column(JSONB)  # PhotoAnalysis complet (voir extractors/vlm.py)
+    # Force estimee du modele qui a produit la legende (modelrank.py). Sert a decider si un worker avec un
+    # VLM plus fort doit re-analyser la photo. NULL pour 'human'.
+    model_rank: Mapped[float | None] = mapped_column(Float)
     tsv: Mapped[str | None] = mapped_column(
         TSVECTOR,
         Computed(
@@ -167,8 +170,42 @@ class SeriesEdge(Base):
     reasons: Mapped[dict] = mapped_column(JSONB)
 
 
+class Worker(Base):
+    """Worker distant (machine perso) qui tire ses jobs par HTTP avec un jeton. Voir workers.py."""
+
+    __tablename__ = "workers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)  # sha256 du jeton
+    # Un jeton peut etre partage par plusieurs processus (worker-ml + worker-vlm) : un etat par instance,
+    # {instance: {extractors, models, versions, vlm_rank, last_seen}}. Fusionne par workers.describe().
+    instances: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PairRequest(Base):
+    """Worker qui demande a rejoindre le serveur (workers.py). Approuve en un clic sur la page Workers."""
+
+    __tablename__ = "pair_requests"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)  # genere par le worker, le prouve porteur
+    hostname: Mapped[str | None] = mapped_column(Text)
+    extractors: Mapped[list] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    worker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workers.id", ondelete="CASCADE"))
+    token: Mapped[str | None] = mapped_column(Text)  # jeton en clair, le temps que le worker vienne le chercher
+
+
 class Job(Base):
-    """File de travail. Un job = (photo, extracteur). Reclame avec SKIP LOCKED."""
+    """File de travail. Un job = (photo, extracteur). Reclame avec SKIP LOCKED.
+
+    `reserved_for` : NULL = file commune (workers connectes a la base) ; sinon le job n'est servi qu'au
+    worker distant designe, qui l'a obtenu via le bouton « analyser N photos ».
+    """
 
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("photo_id", "extractor", name="jobs_photo_extractor_uq"),)
@@ -180,6 +217,7 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
     locked_by: Mapped[str | None] = mapped_column(Text)
+    reserved_for: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workers.id", ondelete="SET NULL"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

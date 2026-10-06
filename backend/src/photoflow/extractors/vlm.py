@@ -16,13 +16,10 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Str200 = Annotated[str, StringConstraints(max_length=200)]
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..images import open_image, resize_for_vlm
-from ..models import Caption
-from ..nudity import apply_level
+from ..persist import persist_caption  # noqa: F401  (re-export historique, utilise par claude_batch)
 from .base import Extractor, PhotoRef
 
 log = logging.getLogger(__name__)
@@ -289,19 +286,6 @@ def get_backend(name: str | None = None) -> VLMBackend:
 
 # --------------------------------------------------------------------------- extracteur
 
-def persist_caption(session: Session, photo_id, source: str, analysis: PhotoAnalysis) -> None:
-    data = analysis.model_dump(mode="json")
-    stmt = insert(Caption).values(
-        photo_id=photo_id, source=source, title=analysis.titre, description=analysis.description, data=data
-    )
-    stmt = stmt.on_conflict_do_update(
-        constraint="captions_photo_source_uq",
-        set_={"title": analysis.titre, "description": analysis.description, "data": data},
-    )
-    session.execute(stmt)
-    apply_level(session, photo_id, analysis.nudite.niveau.value, source)
-
-
 class VLMExtractor(Extractor):
     name = "vlm"
     version = 1
@@ -310,17 +294,11 @@ class VLMExtractor(Extractor):
     def __init__(self, backend: VLMBackend | None = None) -> None:
         self.backend = backend or get_backend()
         self.model_name = f"{self.backend.backend_name}:{self.backend.model_name}"
-        self._last: dict = {}
 
     def run(self, photos: list[PhotoRef]) -> list[dict[str, Any]]:
         out = []
         for p in photos:
             jpeg = resize_for_vlm(open_image(p.web))
             analysis = self.backend.analyze(jpeg)
-            self._last[p.id] = analysis
             out.append({"source": self.backend.source, **analysis.model_dump(mode="json")})
         return out
-
-    def persist(self, session: Session, photo: PhotoRef, result: dict[str, Any]) -> None:
-        persist_caption(session, photo.id, self.backend.source, self._last[photo.id])
-        super().persist(session, photo, result)

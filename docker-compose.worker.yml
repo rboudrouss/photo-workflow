@@ -1,0 +1,61 @@
+# Worker DISTANT : a lancer sur une machine perso, sans rien configurer.
+#
+#   docker compose -f docker-compose.worker.yml up -d --build                 # visages, embeddings, nudite, physique
+#   docker compose -f docker-compose.worker.yml --profile vlm up -d --build   # + VLM local (llama.cpp)
+#
+# Puis ouvrir la page « Workers » du site : la machine apparait « en attente », cliquer « Approuver ».
+# Le worker n'ouvre aucun port et n'a pas acces a la base : il ne fait que des requetes sortantes vers le
+# serveur, telecharge les images, calcule, renvoie les resultats. Son jeton, recu a l'approbation, est garde
+# dans le volume photoflow-worker-data.
+#
+# Facultatif, dans un .env a cote : SERVER_URL (autre serveur), WORKER_NAME (nom propose), WORKER_EXTRACTORS,
+# LLM_HF_REPO / LLM_THREADS / VLM_RANK (VLM), DEVICE=cuda (+ decommenter les blocs deploy, voir docs/models.md).
+
+name: photoflow-worker
+
+x-worker: &worker
+  build: ./backend
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    SERVER_URL: ${SERVER_URL:-https://photoflow.rboud.com}
+    WORKER_NAME: ${WORKER_NAME:-}
+    DATA_DIR: /data
+    DEVICE: ${DEVICE:-cpu}
+    # Le modele d'embedding est impose par le serveur a la connexion ; ne pas le fixer ici.
+    VLM_BACKEND: llama
+    LLM_BASE_URL: http://llm:8080/v1
+    VLM_MAX_SIDE: ${VLM_MAX_SIDE:-896}
+  volumes:
+    - photoflow-worker-data:/data   # jeton d'appairage + cache des modeles (SigLIP, InsightFace, NudeNet)
+  restart: unless-stopped
+
+services:
+  worker-ml:
+    <<: *worker
+    command: photoflow worker --extractors ${WORKER_EXTRACTORS:-physical,embedding,faces,nudity}
+
+  worker-vlm:
+    <<: *worker
+    profiles: [vlm]
+    command: photoflow worker --extractors vlm
+    depends_on: [llm]
+
+  llm:
+    profiles: [vlm]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -hf ${LLM_HF_REPO:-Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M}
+      --host 0.0.0.0 --port 8080
+      -c 8192 -np 1 --jinja
+      --threads ${LLM_THREADS:-8}
+    environment:
+      LLAMA_CACHE: /models
+    volumes:
+      - photoflow-worker-llm:/models
+    restart: unless-stopped
+
+volumes:
+  photoflow-worker-data:
+  photoflow-worker-llm:

@@ -13,6 +13,7 @@ Routes principales :
   PUT  /api/faces/clusters/{cid}/person   nommer un cluster
   GET  /api/faces/{id}/crop.jpg
   GET  /media/{thumb|web}/{id}.jpg, /media/original/{id}
+  /api/worker/*, /api/workers/*  workers distants (api/workers.py)
 """
 
 from __future__ import annotations
@@ -36,10 +37,13 @@ from ..images import derived_paths, open_image, original_path
 from ..models import Caption, Face, Person, Photo, Series
 from ..queue import stats as job_stats
 
+from .workers import router as workers_router
+
 app = FastAPI(title="photoflow", version="0.1.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"]
 )
+app.include_router(workers_router)
 
 
 # --------------------------------------------------------------------------- helpers

@@ -51,6 +51,10 @@ EXTRA_SQL = [
     "CREATE INDEX IF NOT EXISTS captions_tsv_idx ON captions USING gin (tsv)",
     "CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs (extractor, status, created_at)",
     "CREATE INDEX IF NOT EXISTS photos_phash_idx ON photos (phash)",
+    # Workers distants et reservation de jobs.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reserved_for UUID REFERENCES workers(id) ON DELETE SET NULL",
+    "CREATE INDEX IF NOT EXISTS jobs_reserved_idx ON jobs (reserved_for, extractor, status)",
+    "ALTER TABLE captions ADD COLUMN IF NOT EXISTS model_rank REAL",
 ]
 
 
@@ -63,3 +67,17 @@ def init_db() -> None:
     with engine.begin() as conn:
         for stmt in EXTRA_SQL:
             conn.execute(text(stmt))
+    backfill_model_rank()
+
+
+def backfill_model_rank() -> None:
+    """Renseigne captions.model_rank pour les legendes creees avant l'ajout de la colonne."""
+    from .modelrank import rank_of_source
+
+    with engine.begin() as conn:
+        sources = conn.execute(text("SELECT DISTINCT source FROM captions WHERE model_rank IS NULL")).scalars().all()
+        for src in sources:
+            conn.execute(
+                text("UPDATE captions SET model_rank = :r WHERE source = :s AND model_rank IS NULL"),
+                {"r": rank_of_source(src), "s": src},
+            )
