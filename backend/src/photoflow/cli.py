@@ -60,6 +60,17 @@ def ingest(
 
 
 @app.command()
+def watch(
+    interval: float = typer.Option(30.0, help="Secondes entre deux passages."),
+    once: bool = typer.Option(False, help="Un seul passage."),
+):
+    """Surveille PHOTOS_ROOT et ingere tout nouveau fichier image, comme un upload depuis l'interface."""
+    from .watch import watch as run
+
+    run(interval, once)
+
+
+@app.command()
 def worker(
     extractors: str = typer.Option(",".join(["physical", "embedding", "faces", "nudity", "vlm"]), help="Extracteurs geres par ce worker."),
     once: bool = typer.Option(False, help="S'arreter quand la file est vide."),

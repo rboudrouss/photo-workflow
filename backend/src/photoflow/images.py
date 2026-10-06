@@ -72,5 +72,11 @@ def to_base64(data: bytes) -> str:
     return base64.standard_b64encode(data).decode("ascii")
 
 
+UPLOADS_PREFIX = "_uploads/"
+
+
 def original_path(rel_path: str) -> Path:
+    """PHOTOS_ROOT est monte en lecture seule ; les photos televersees vivent sous DATA_DIR/_uploads/."""
+    if rel_path.startswith(UPLOADS_PREFIX):
+        return settings.data_dir / rel_path
     return settings.photos_root / rel_path

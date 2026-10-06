@@ -7,6 +7,7 @@ Routes principales :
   PUT  /api/photos/{id}/caption    legende humaine
   GET  /api/photos/{id}/fiche      texte pret a coller sur Delcampe
   GET  /api/export/delcampe.csv?ids=a,b,c
+  POST /api/upload                 televerser des photos (multipart, champ files)
   GET  /api/series, /api/series/{id}, PUT /api/series/{id}, POST /api/series/{id}/propagate
   GET  /api/faces/clusters         clusters de visages
   GET  /api/faces/clusters/{cid}
@@ -20,20 +21,21 @@ from __future__ import annotations
 
 import io
 import uuid
+from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from .. import delcampe
+from .. import delcampe, ingest
 from ..config import settings
 from ..nudity import LEVELS as NUDITY_LEVELS, apply_level
 from ..db import get_session
-from ..images import derived_paths, open_image, original_path
+from ..images import SUPPORTED_EXT, derived_paths, open_image, original_path
 from ..models import Caption, Face, Person, Photo, Series
 from ..queue import stats as job_stats
 
@@ -596,6 +598,54 @@ def face_crop(face_id: uuid.UUID, session: Session = Depends(get_session)):
     buf = io.BytesIO()
     crop.save(buf, "JPEG", quality=85)
     return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+# --------------------------------------------------------------------------- upload
+
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+
+@app.post("/api/upload")
+async def upload(files: list[UploadFile] = File(...), session: Session = Depends(get_session)):
+    """Televerse des photos. Le nom de fichier est conserve tel quel dans photos.filename (c'est l'identifiant
+    de l'utilisateur) ; le fichier est range sous DATA_DIR/_uploads/<date>/. Un fichier deja en base (meme
+    contenu) est signale comme doublon avec l'id de la photo existante."""
+    out = []
+    for f in files:
+        name = ingest.safe_filename(f.filename or "")
+        item: dict = {"filename": name}
+        try:
+            if Path(name).suffix.lower() not in SUPPORTED_EXT:
+                raise ValueError(f"format non pris en charge ({Path(name).suffix or 'sans extension'})")
+            data = await f.read()
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise ValueError("fichier trop gros (max 200 Mo)")
+            if not data:
+                raise ValueError("fichier vide")
+            path, rel = ingest.upload_target(name, data)
+            written = not path.exists()
+            if written:
+                path.write_bytes(data)
+            try:
+                photo = ingest.ingest_file(session, path, rel, filename=name)
+                session.commit()
+            except ingest.Duplicate as d:
+                session.rollback()
+                if written:
+                    path.unlink(missing_ok=True)  # deja en base ailleurs : pas de copie orpheline
+                item.update(status="duplicate", existing_id=str(d.existing_id))
+                out.append(item)
+                continue
+            except Exception:
+                session.rollback()
+                if written:
+                    path.unlink(missing_ok=True)
+                raise
+            item.update(status="new", id=str(photo.id))
+        except Exception as e:  # noqa: BLE001
+            item.update(status="error", error=str(e)[:300])
+        out.append(item)
+    return {"items": out}
 
 
 # --------------------------------------------------------------------------- media

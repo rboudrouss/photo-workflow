@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import re
 import unicodedata
 from pathlib import Path
 
@@ -37,6 +39,67 @@ def _exif_dict(img: Image.Image) -> dict | None:
     return out or None
 
 
+class Duplicate(Exception):
+    """Fichier deja en base (meme sha256). `existing_id` = la photo existante."""
+
+    def __init__(self, existing_id):
+        super().__init__("doublon")
+        self.existing_id = existing_id
+
+
+def ingest_file(session, path: Path, rel_path: str, extractors: list[str] | None = None, filename: str | None = None) -> Photo:
+    """Enregistre un fichier image deja en place sur le disque, genere ses derives, met ses jobs en file."""
+    digest = images.sha256_file(path)
+    existing = session.scalar(select(Photo.id).where(Photo.sha256 == digest))
+    if existing is not None:
+        raise Duplicate(existing)
+    img = images.open_image(path)
+    photo = Photo(
+        sha256=digest,
+        rel_path=rel_path,
+        filename=unicodedata.normalize("NFC", filename or path.name),  # macOS scanne en NFD
+        width=img.width,
+        height=img.height,
+        bytes=path.stat().st_size,
+        format=(Image.open(path).format or "").upper() or None,
+        phash=images.phash64(img),
+        exif=_exif_dict(img),
+        status="ready",
+    )
+    session.add(photo)
+    session.flush()
+    images.make_derived(img, photo.id)
+    queue.enqueue(session, [photo.id], extractors if extractors is not None else settings.default_extractors)
+    return photo
+
+
+_UNSAFE = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
+
+
+def safe_filename(name: str) -> str:
+    """Nom de fichier tel qu'envoye, normalise NFC, sans separateurs de chemin ni caracteres de controle."""
+    name = unicodedata.normalize("NFC", Path(name).name).strip()
+    name = _UNSAFE.sub("_", name)
+    return name or "sans-nom"
+
+
+def upload_target(filename: str, data: bytes) -> tuple[Path, str]:
+    """Emplacement d'un fichier televerse : DATA_DIR/_uploads/<date>/<nom>. Si un fichier du meme nom existe deja
+    avec un autre contenu, suffixe ' (2)', ' (3)'... Le nom d'origine reste dans photos.filename."""
+    day = dt.date.today().isoformat()
+    folder = settings.data_dir / images.UPLOADS_PREFIX / day
+    folder.mkdir(parents=True, exist_ok=True)
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    candidate, i = folder / filename, 2
+    while candidate.exists():
+        if candidate.read_bytes() == data:
+            break
+        candidate = folder / f"{stem} ({i}){suffix}"
+        i += 1
+    rel = f"{images.UPLOADS_PREFIX}{day}/{candidate.name}"
+    return candidate, rel
+
+
 def ingest_dir(directory: Path, extractors: list[str] | None = None, limit: int | None = None) -> dict:
     """Ingere tous les fichiers image sous `directory` (qui doit etre sous PHOTOS_ROOT)."""
     directory = directory.resolve()
@@ -46,46 +109,19 @@ def ingest_dir(directory: Path, extractors: list[str] | None = None, limit: int 
     except ValueError as e:
         raise SystemExit(f"{directory} n'est pas sous PHOTOS_ROOT={root}") from e
 
-    extractors = extractors if extractors is not None else settings.default_extractors
-    counts = {"new": 0, "duplicate": 0, "error": 0, "jobs": 0}
-    new_ids = []
-
-    with session_scope() as session:
-        known = set(session.scalars(select(Photo.sha256)).all())
-
-    for i, path in enumerate(iter_files(directory)):
+    counts = {"new": 0, "duplicate": 0, "error": 0}
+    for path in iter_files(directory):
         if limit is not None and counts["new"] >= limit:
             break
         try:
-            digest = images.sha256_file(path)
-            if digest in known:
-                counts["duplicate"] += 1
-                continue
-            img = images.open_image(path)
             with session_scope() as session:
-                photo = Photo(
-                    sha256=digest,
-                    rel_path=str(path.relative_to(root)),
-                    filename=unicodedata.normalize("NFC", path.name),  # macOS scanne en NFD
-                    width=img.width,
-                    height=img.height,
-                    bytes=path.stat().st_size,
-                    format=(Image.open(path).format or "").upper() or None,
-                    phash=images.phash64(img),
-                    exif=_exif_dict(img),
-                    status="ready",
-                )
-                session.add(photo)
-                session.flush()
-                images.make_derived(img, photo.id)
-                counts["jobs"] += queue.enqueue(session, [photo.id], extractors)
-                new_ids.append(photo.id)
-            known.add(digest)
+                ingest_file(session, path, str(path.relative_to(root)), extractors)
             counts["new"] += 1
             if counts["new"] % 100 == 0:
                 log.info("ingestion: %d nouvelles photos", counts["new"])
+        except Duplicate:
+            counts["duplicate"] += 1
         except Exception:
             log.exception("echec ingestion %s", path)
             counts["error"] += 1
-
     return counts

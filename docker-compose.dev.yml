@@ -86,6 +86,13 @@ services:
     ports: ["3000:3000"]
     depends_on: [api]
 
+  # Surveille le dossier photos : un fichier ajoute est ingere au passage suivant.
+  watcher:
+    <<: *backend
+    command: photoflow watch --interval 10
+    depends_on:
+      db: { condition: service_healthy }
+
 volumes:
   photoflow-db:
   photoflow-data:

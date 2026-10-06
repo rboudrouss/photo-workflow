@@ -2,11 +2,13 @@
 # Aucun worker ici : le calcul vient des workers distants (docker-compose.worker.yml) ou d'une grosse
 # machine branchee directement sur la base (docker-compose.yml).
 #
-#   cp .env.example .env     # PHOTOS_DIR, POSTGRES_PASSWORD, DOMAIN, UI_USER, UI_PASSWORD_HASH
+#   cp .env.example .env     # POSTGRES_PASSWORD, DOMAIN, UI_USER, UI_PASSWORD_HASH (PHOTOS_DIR facultatif)
 #   docker compose -f docker-compose.server.yml up -d --build
 #   docker compose -f docker-compose.server.yml run --rm api photoflow db init
-#   docker compose -f docker-compose.server.yml run --rm api photoflow ingest /photos
+#   docker compose -f docker-compose.server.yml run --rm api photoflow ingest /photos   # si PHOTOS_DIR
 #
+# Les photos ajoutees depuis la page « Ajouter » sont stockees dans le volume photoflow-data (_uploads/<date>/),
+# avec leur nom d'origine. PHOTOS_DIR ne sert qu'a ingerer un dossier deja present sur le serveur.
 # Les workers distants s'appairent depuis la page « Workers » (bouton Approuver) ; `photoflow workers create`
 # reste disponible pour un jeton fixe.
 #
@@ -28,7 +30,7 @@ x-backend: &backend
     # Meme origine que le site (Caddy sert / et /api) : pas de CORS a ouvrir.
     CORS_ORIGINS: '["https://${DOMAIN:?definir DOMAIN}"]'
   volumes:
-    - ${PHOTOS_DIR:?definir PHOTOS_DIR dans .env}:/photos:ro
+    - ${PHOTOS_DIR:-./photos}:/photos:ro
     - photoflow-data:/data
   restart: unless-stopped
 
@@ -59,6 +61,13 @@ services:
       PUBLIC_API_BASE: https://${DOMAIN}
     depends_on: [api]
     restart: unless-stopped
+
+  # Surveille PHOTOS_DIR : tout fichier depose dans ce dossier (scanner, rsync, partage) est ingere comme un upload.
+  watcher:
+    <<: *backend
+    command: photoflow watch --interval ${WATCH_INTERVAL:-30}
+    depends_on:
+      db: { condition: service_healthy }
 
   caddy:
     image: caddy:2

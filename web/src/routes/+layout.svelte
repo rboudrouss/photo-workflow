@@ -9,6 +9,7 @@
 	<a href="/series">Séries</a>
 	<a href="/stats">Statut</a>
 	<a href="/workers">Workers</a>
+	<a href="/upload">Ajouter</a>
 </nav>
 <main>
 	{@render children()}

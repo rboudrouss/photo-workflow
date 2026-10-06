@@ -34,6 +34,7 @@ docker compose -f docker-compose.dev.yml run --rm api photoflow series build
 
 ```bash
 photoflow ingest /photos/dossier            # ingérer un dossier (sous PHOTOS_ROOT)
+photoflow watch --interval 30               # surveiller PHOTOS_ROOT et ingérer ce qui apparaît
 photoflow jobs stats                        # état de la file
 photoflow jobs enqueue vlm --force          # relancer un extracteur sur tout le fonds
 photoflow jobs retry-failed
@@ -69,6 +70,8 @@ docker compose -f docker-compose.worker.yml --profile vlm up -d --build    # + V
 ```
 
 Puis page « Workers » du site : la machine apparaît en attente, « Approuver », puis « Analyser N photos ».
+Les photos s'ajoutent depuis la page « Ajouter » (glisser-déposer, noms de fichiers conservés), ou en les
+déposant dans `PHOTOS_DIR` : le service `watcher` les ingère sous une minute.
 
 ## Grosse machine (Spark ou Mac Studio)
 

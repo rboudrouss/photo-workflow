@@ -38,6 +38,21 @@ en file au démarrage d'un worker.
 Chaque worker ne gère que les extracteurs qu'on lui donne. Cela permet par exemple un worker GPU sur la grosse
 machine pour le VLM et un worker CPU ailleurs pour les visages, ou de couper le VLM sans bloquer le reste.
 
+## Ajout de photos
+
+Trois entrées, même fonction `ingest_file` : `photoflow ingest <dossier>` pour un dossier déjà sur la machine
+(sous `PHOTOS_ROOT`, monté en lecture seule), `POST /api/upload` depuis la page « Ajouter », et le service
+`watcher` (`photoflow watch`) qui surveille `PHOTOS_ROOT` en continu. Le watcher compare les chemins relatifs
+à ceux déjà en base ; un fichier nouveau n'est ingéré qu'au passage suivant, une fois sa taille et sa date
+stables (copie terminée), donc sous une minute avec l'intervalle par défaut de 30 s. Un fichier remplacé sous
+le même nom n'est pas revu ; un doublon de contenu est ignoré. Les fichiers
+téléversés vont dans `DATA_DIR/_uploads/<date>/` (volume `photoflow-data`), `rel_path` commence par
+`_uploads/` et `original_path()` sait le résoudre. Le nom de fichier d'origine est conservé tel quel dans
+`photos.filename` (normalisé NFC, sans séparateurs) : c'est l'identifiant de l'utilisateur, il reste
+recherchable même si deux fichiers portent le même nom. Sur le disque, un homonyme de contenu différent est
+suffixé « (2) ». Un fichier dont le contenu (sha256) est déjà en base n'est pas réajouté, l'interface renvoie
+vers la photo existante. Chaque ajout met en file les extracteurs par défaut.
+
 ## Workers distants (calcul décentralisé)
 
 Déploiement visé : un petit serveur public (`docker-compose.server.yml`) porte la base, l'API, l'interface et un

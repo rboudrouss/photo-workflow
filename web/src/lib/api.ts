@@ -133,6 +133,23 @@ export interface PendingWorker {
 	since: string;
 }
 
+export interface UploadItem {
+	filename: string;
+	status: 'new' | 'duplicate' | 'error';
+	id?: string;
+	existing_id?: string;
+	error?: string;
+}
+
+/** Televerse un lot de fichiers (multipart). Pas de content-type JSON ici : le navigateur fixe la frontiere multipart. */
+export async function upload(files: File[]): Promise<UploadItem[]> {
+	const fd = new FormData();
+	for (const f of files) fd.append('files', f, f.name);
+	const r = await fetch(API + '/api/upload', { method: 'POST', body: fd });
+	if (!r.ok) throw new Error(`${r.status} ${r.statusText} sur /api/upload`);
+	return ((await r.json()) as { items: UploadItem[] }).items;
+}
+
 export const api = {
 	stats: () => call<any>('/api/stats'),
 	workers: () => call<{ workers: WorkerInfo[]; pending: PendingWorker[] }>('/api/workers'),
