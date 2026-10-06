@@ -177,6 +177,9 @@ export async function upload(files: File[]): Promise<UploadItem[]> {
 	return ((await r.json()) as { items: UploadItem[] }).items;
 }
 
+/** Taille de page de la grille des photos. */
+export const PAGE_SIZE = 60;
+
 export const api = {
 	stats: () => call<any>('/api/stats'),
 	workers: () => call<{ workers: WorkerInfo[]; pending: PendingWorker[] }>('/api/workers'),

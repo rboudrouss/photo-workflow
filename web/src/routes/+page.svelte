@@ -1,8 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, media, isExplicit, type PhotoSummary, type Facets } from '$lib/api';
+	import { goto } from '$app/navigation';
+	import { navigating } from '$app/state';
+	import { api, media, isExplicit, PAGE_SIZE, type Facets } from '$lib/api';
 	import { blur } from '$lib/blur.svelte';
+	import type { PageData } from './$types';
 
+	let { data }: { data: PageData } = $props();
+
+	// Champs du formulaire : recopies de l'URL a chaque navigation (retour arriere compris), modifies localement.
 	let q = $state('');
 	let mode = $state<'text' | 'vector'>('text');
 	let scene = $state('');
@@ -10,36 +16,30 @@
 	let nudity = $state<'all' | 'exclude' | 'only'>('all');
 	let typeObjet = $state('');
 	let vlm = $state('');
-	let page = $state(1);
-	let items = $state<PhotoSummary[]>([]);
-	let total = $state<number | null>(null);
-	let loading = $state(false);
-	let error = $state('');
+	$effect.pre(() => {
+		({ q, mode, scene, decade, nudity, vlm } = data.params);
+		typeObjet = data.params.type_objet;
+	});
+
 	let vectorSearch = $state(true);
 	let facets = $state<Facets>({ types: [], scenes: [], decades: [], vlm: [] });
+	let loading = $derived(navigating.to?.url.pathname === '/');
 
-	async function load() {
-		loading = true;
-		error = '';
-		try {
-			const r = await api.photos({ q, mode, scene, decade, nudity, type_objet: typeObjet, vlm, page, page_size: 60 });
-			items = r.items;
-			total = r.total;
-		} catch (e: any) {
-			error = e.message;
-		} finally {
-			loading = false;
-		}
+	function go(page: number) {
+		const params: Record<string, string> = { q, mode, scene, decade, nudity, type_objet: typeObjet, vlm, page: String(page) };
+		const defaults: Record<string, string> = { mode: 'text', nudity: 'all', page: '1' };
+		const u = new URLSearchParams();
+		for (const [k, v] of Object.entries(params)) if (v && v !== defaults[k]) u.set(k, v);
+		const qs = u.toString();
+		goto(qs ? `/?${qs}` : '/', { keepFocus: true });
 	}
 
 	function search(e: Event) {
 		e.preventDefault();
-		page = 1;
-		load();
+		go(1);
 	}
 
 	onMount(async () => {
-		load();
 		try {
 			facets = await api.facets();
 			const st = await api.stats();
@@ -78,13 +78,13 @@
 		{#each facets.vlm as f}<option value={f.value}>par {f.value.replace(/^vlm:/, '')} ({f.count})</option>{/each}
 	</select>
 	<button type="submit">Chercher</button>
-	<span class="muted">{total !== null ? `${total} photo(s)` : ''}{loading ? ' …' : ''}</span>
+	<span class="muted">{data.total !== null ? `${data.total} photo(s)` : ''}{loading ? ' …' : ''}</span>
 </form>
 
-{#if error}<p style="color:#f66">{error}</p>{/if}
+{#if data.error}<p style="color:#f66">{data.error}</p>{/if}
 
 <div class="grid">
-	{#each items as p (p.id)}
+	{#each data.items as p (p.id)}
 		<a class="card" href={`/photo/${p.id}`}>
 			<img src={media(p.media.thumb)} alt={p.title ?? p.filename} loading="lazy" class:blur={blur.on && isExplicit(p.nudity_level)} />
 			<div class="t" title={p.title ?? p.filename}>
@@ -96,9 +96,9 @@
 </div>
 
 <div class="pager">
-	<button disabled={page <= 1} onclick={() => { page--; load(); }}>Precedent</button>
-	<span>page {page}</span>
-	<button disabled={items.length < 60} onclick={() => { page++; load(); }}>Suivant</button>
+	<button disabled={data.params.page <= 1} onclick={() => go(data.params.page - 1)}>Precedent</button>
+	<span>page {data.params.page}</span>
+	<button disabled={data.items.length < PAGE_SIZE} onclick={() => go(data.params.page + 1)}>Suivant</button>
 </div>
 
 <style>

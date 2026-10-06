@@ -228,6 +228,12 @@ def stats(session: Session = Depends(get_session)):
     }
 
 
+# Hors recherche semantique (triee par score) : photos avec une description d'abord.
+_DESCRIBED_FIRST = (
+    "EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND coalesce(c.description, '') <> '') DESC"
+)
+
+
 @app.get("/api/photos")
 def list_photos(
     q: str | None = None,
@@ -296,14 +302,14 @@ def list_photos(
         sql = f"""
             SELECT p.*, {_best_title_sql()} AS title, NULL::float AS score
             FROM photos p WHERE {' AND '.join(where)}
-            ORDER BY p.ingested_at DESC LIMIT :limit OFFSET :offset
+            ORDER BY {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id LIMIT :limit OFFSET :offset
         """
         total = session.scalar(text(f"SELECT count(*) FROM photos p WHERE {' AND '.join(where)}"), params)
     else:
         sql = f"""
             SELECT p.*, {_best_title_sql()} AS title, NULL::float AS score
             FROM photos p WHERE {' AND '.join(where)}
-            ORDER BY p.ingested_at DESC LIMIT :limit OFFSET :offset
+            ORDER BY {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id LIMIT :limit OFFSET :offset
         """
         total = session.scalar(text(f"SELECT count(*) FROM photos p WHERE {' AND '.join(where)}"), params)
 

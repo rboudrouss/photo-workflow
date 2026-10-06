@@ -183,7 +183,12 @@ def merged(w: Worker) -> dict[str, Any]:
         for t in v.get("tasks", []):
             if t not in tasks:
                 tasks.append(t)
-        models.update(v.get("models") or {})
+        for ex, m in (v.get("models") or {}).items():
+            # Deux instances d'un meme extracteur avec des modeles differents (ex. llama + Claude) : on montre les deux.
+            if models.get(ex) and m and m not in models[ex].split(" + "):
+                models[ex] = f"{models[ex]} + {m}"
+            else:
+                models[ex] = models.get(ex) or m
         versions.update(v.get("versions") or {})
         if v.get("vlm_rank") is not None:
             vlm_rank = max(vlm_rank or 0.0, float(v["vlm_rank"]))
