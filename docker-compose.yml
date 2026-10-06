@@ -1,0 +1,141 @@
+# Environnement "grosse machine" (>= 128 Go unifies : DGX Spark ou Mac Studio).
+# Modeles lourds, passe complete sur le corpus. Voir docs/models.md avant de choisir le profil.
+#
+# Profils :
+#   cuda : DGX Spark (ou tout Linux + NVIDIA). llama.cpp CUDA dans Docker, workers ML sur GPU.
+#          ATTENTION : l'image server-cuda officielle est publiee en amd64 ; sur Spark (arm64) il faut
+#          soit la construire localement (docs/models.md), soit lancer llama-server en natif comme sur Mac.
+#   mac  : Mac Studio. Docker n'a pas acces au GPU Metal : llama-server tourne EN NATIF sur l'hote
+#          (brew install llama.cpp) et les conteneurs le joignent via host.docker.internal.
+#
+#   docker compose --profile cuda up -d --build
+#   docker compose --profile mac  up -d --build     (apres avoir lance llama-server sur l'hote)
+#   docker compose run --rm api photoflow db init
+#   docker compose run --rm api photoflow ingest /photos
+
+name: photoflow
+
+x-backend: &backend
+  build: ./backend
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://photoflow:${POSTGRES_PASSWORD:-photoflow}@db:5432/photoflow
+    PHOTOS_ROOT: /photos
+    DATA_DIR: /data
+    # SigLIP 2 so400m : meilleure qualite de recherche, 1152 dimensions.
+    EMBEDDING_MODEL: ${EMBEDDING_MODEL:-google/siglip2-so400m-patch16-384}
+    EMBEDDING_DIM: ${EMBEDDING_DIM:-1152}
+    EMBEDDING_BATCH_SIZE: "32"
+    VLM_BACKEND: ${VLM_BACKEND:-llama}
+    LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:8080/v1}
+  volumes:
+    - ${PHOTOS_DIR:?definir PHOTOS_DIR dans .env}:/photos:ro
+    - photoflow-data:/data
+  restart: unless-stopped
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: photoflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-photoflow}
+      POSTGRES_DB: photoflow
+    command: >
+      postgres -c shared_buffers=2GB -c maintenance_work_mem=1GB -c max_wal_size=4GB
+    volumes:
+      - photoflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photoflow"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: photoflow serve
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    build: ./web
+    environment:
+      PUBLIC_API_BASE: ${PUBLIC_API_BASE:-http://localhost:8000}
+    ports: ["3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- profil cuda (Spark / Linux NVIDIA)
+  worker-ml-cuda:
+    <<: *backend
+    profiles: [cuda]
+    command: photoflow worker --extractors physical,embedding,faces,nudity
+    environment:
+      DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      db: { condition: service_healthy }
+
+  worker-vlm-cuda:
+    <<: *backend
+    profiles: [cuda]
+    command: photoflow worker --extractors vlm
+    depends_on:
+      db: { condition: service_healthy }
+
+  llm:
+    profiles: [cuda]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    # Qwen3-VL 32B Q8 (~35 Go) : la meilleure qualite dense qui tient confortablement en 128 Go.
+    # Alternative plus rapide : Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF:Q8_0 (MoE, 3 Go actifs).
+    command: >
+      -hf ${LLM_HF_REPO:-Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0}
+      --host 0.0.0.0 --port 8080
+      -c 16384 -np ${LLM_PARALLEL:-2} --jinja
+      -ngl 999 --flash-attn on
+    environment:
+      LLAMA_CACHE: /models
+    ports: ["8080:8080"]
+    volumes:
+      - photoflow-llm:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- profil mac (Mac Studio)
+  # Workers sur CPU dans Docker (SigLIP + InsightFace restent rapides), VLM natif sur l'hote.
+  worker-ml-mac:
+    <<: *backend
+    profiles: [mac]
+    command: photoflow worker --extractors physical,embedding,faces,nudity
+    environment:
+      DEVICE: cpu
+    depends_on:
+      db: { condition: service_healthy }
+
+  worker-vlm-mac:
+    <<: *backend
+    profiles: [mac]
+    command: photoflow worker --extractors vlm
+    environment:
+      LLM_BASE_URL: http://host.docker.internal:8080/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  photoflow-db:
+  photoflow-data:
+  photoflow-llm:

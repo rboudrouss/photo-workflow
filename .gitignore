@@ -1,0 +1,12 @@
+.env
+samples/
+data/
+*.pyc
+__pycache__/
+.venv/
+backend/.venv/
+backend/uv.lock
+web/node_modules/
+web/.svelte-kit/
+web/build/
+.DS_Store
