@@ -236,6 +236,7 @@ def list_photos(
     decade: str | None = None,
     nudity: Literal["all", "exclude", "only"] = "all",
     type_objet: str | None = None,
+    vlm: str | None = None,  # "any" : decrite par un VLM, "none" : jamais, sinon une source precise (vlm:llama:...)
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=500),
     session: Session = Depends(get_session),
@@ -252,6 +253,13 @@ def list_photos(
     if type_objet:
         where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.data->>'type_objet' = :type_objet)")
         params["type_objet"] = type_objet
+    if vlm == "any":
+        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
+    elif vlm == "none":
+        where.append("NOT EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source LIKE 'vlm:%')")
+    elif vlm:
+        where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source = :vlm)")
+        params["vlm"] = vlm
     if nudity == "exclude":
         where.append("coalesce(p.nudity_level, 'aucune') = 'aucune'")
     elif nudity == "only":
@@ -457,8 +465,12 @@ def facets(session: Session = Depends(get_session)):
     types = session.execute(
         text("SELECT data->>'type_objet' AS k, count(DISTINCT photo_id) AS n FROM captions WHERE data->>'type_objet' IS NOT NULL GROUP BY 1 ORDER BY 2 DESC")
     ).all()
+    vlm = session.execute(
+        text("SELECT source AS k, count(DISTINCT photo_id) AS n FROM captions WHERE source LIKE 'vlm:%' GROUP BY 1 ORDER BY 2 DESC")
+    ).all()
     return {
         "types": [{"value": r.k, "count": r.n} for r in types],
+        "vlm": [{"value": r.k, "count": r.n} for r in vlm],
         "scenes": [{"value": r.k, "count": r.n} for r in scenes],
         "decades": [{"value": r.k, "count": r.n} for r in decades],
         "nudity": [{"value": r.k, "count": r.n} for r in nudity],

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { blur, setBlur } from '$lib/blur.svelte';
+
 	let { children } = $props();
 </script>
 
@@ -10,6 +12,9 @@
 	<a href="/stats">Statut</a>
 	<a href="/workers">Workers</a>
 	<a href="/upload">Ajouter</a>
+	<label class="blur-toggle" title="Flouter les photos avec nudité">
+		<input type="checkbox" checked={blur.on} onchange={(e) => setBlur(e.currentTarget.checked)} /> flouter
+	</label>
 </nav>
 <main>
 	{@render children()}
@@ -36,6 +41,11 @@
 	nav a {
 		color: #ddd;
 		text-decoration: none;
+	}
+	.blur-toggle {
+		margin-left: auto;
+		color: #ddd;
+		font-size: 0.9rem;
 	}
 	.brand {
 		font-weight: 700;

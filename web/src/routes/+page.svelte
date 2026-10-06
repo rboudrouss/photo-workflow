@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, media, isExplicit, type PhotoSummary } from '$lib/api';
+	import { api, media, isExplicit, type PhotoSummary, type Facets } from '$lib/api';
+	import { blur } from '$lib/blur.svelte';
 
 	let q = $state('');
 	let mode = $state<'text' | 'vector'>('text');
@@ -8,20 +9,20 @@
 	let decade = $state('');
 	let nudity = $state<'all' | 'exclude' | 'only'>('all');
 	let typeObjet = $state('');
-	let blur = $state(true);
+	let vlm = $state('');
 	let page = $state(1);
 	let items = $state<PhotoSummary[]>([]);
 	let total = $state<number | null>(null);
 	let loading = $state(false);
 	let error = $state('');
 	let vectorSearch = $state(true);
-	let facets = $state<{ types: { value: string; count: number }[]; scenes: { value: string; count: number }[]; decades: { value: string; count: number }[] }>({ types: [], scenes: [], decades: [] });
+	let facets = $state<Facets>({ types: [], scenes: [], decades: [], vlm: [] });
 
 	async function load() {
 		loading = true;
 		error = '';
 		try {
-			const r = await api.photos({ q, mode, scene, decade, nudity, type_objet: typeObjet, page, page_size: 60 });
+			const r = await api.photos({ q, mode, scene, decade, nudity, type_objet: typeObjet, vlm, page, page_size: 60 });
 			items = r.items;
 			total = r.total;
 		} catch (e: any) {
@@ -70,7 +71,12 @@
 		<option value="exclude">sans nudite</option>
 		<option value="only">nudite seulement</option>
 	</select>
-	<label class="muted"><input type="checkbox" bind:checked={blur} /> flouter</label>
+	<select bind:value={vlm} onchange={search}>
+		<option value="">description : toutes</option>
+		<option value="any">decrites par un VLM</option>
+		<option value="none">jamais decrites</option>
+		{#each facets.vlm as f}<option value={f.value}>par {f.value.replace(/^vlm:/, '')} ({f.count})</option>{/each}
+	</select>
 	<button type="submit">Chercher</button>
 	<span class="muted">{total !== null ? `${total} photo(s)` : ''}{loading ? ' …' : ''}</span>
 </form>
@@ -80,7 +86,7 @@
 <div class="grid">
 	{#each items as p (p.id)}
 		<a class="card" href={`/photo/${p.id}`}>
-			<img src={media(p.media.thumb)} alt={p.title ?? p.filename} loading="lazy" class:blur={blur && isExplicit(p.nudity_level)} />
+			<img src={media(p.media.thumb)} alt={p.title ?? p.filename} loading="lazy" class:blur={blur.on && isExplicit(p.nudity_level)} />
 			<div class="t" title={p.title ?? p.filename}>
 				{p.title ?? p.filename}
 				{#if p.score != null}<span class="muted"> {p.score.toFixed(2)}</span>{/if}

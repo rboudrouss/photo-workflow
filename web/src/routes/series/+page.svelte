@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { blur } from '$lib/blur.svelte';
 	import { onMount } from 'svelte';
 	import { api, media, isExplicit, type SeriesSummary } from '$lib/api';
 
@@ -30,7 +31,7 @@
 	{#each items as s (s.id)}
 		<a class="serie" href={`/series/${s.id}`}>
 			<div class="samples">
-				{#each s.samples as p}<img src={media(p.media.thumb)} alt="" class:blur={isExplicit(p.nudity_level)} />{/each}
+				{#each s.samples as p}<img src={media(p.media.thumb)} alt="" class:blur={blur.on && isExplicit(p.nudity_level)} />{/each}
 			</div>
 			<div class="t">
 				<b>{s.name ?? `Série ${s.id}`}</b>

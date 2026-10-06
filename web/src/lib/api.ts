@@ -19,6 +19,18 @@ export interface Media {
 	original: string;
 }
 
+export interface Facet {
+	value: string;
+	count: number;
+}
+
+export interface Facets {
+	types: Facet[];
+	scenes: Facet[];
+	decades: Facet[];
+	vlm: Facet[];
+}
+
 export interface PhotoSummary {
 	id: string;
 	filename: string;
@@ -177,7 +189,7 @@ export const api = {
 	requestTask: (id: string, kind: string) =>
 		call<TaskInfo>(`/api/workers/${id}/tasks`, { method: 'POST', body: JSON.stringify({ kind, params: {} }) }),
 	unassign: (id: string) => call<{ released: number }>(`/api/workers/${id}/unassign`, { method: 'POST' }),
-	facets: () => call<{ types: { value: string; count: number }[]; scenes: { value: string; count: number }[]; decades: { value: string; count: number }[] }>('/api/facets'),
+	facets: () => call<Facets>('/api/facets'),
 	photos: (params: Record<string, string | number | undefined>) => {
 		const q = new URLSearchParams();
 		for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') q.set(k, String(v));

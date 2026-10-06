@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { blur } from '$lib/blur.svelte';
 	import { page } from '$app/state';
 	import { api, media, isExplicit, type SeriesDetail } from '$lib/api';
 
@@ -106,7 +107,7 @@
 	<div class="grid">
 		{#each data.photos as p (p.id)}
 			<a class="card" href={`/photo/${p.id}`}>
-				<img src={media(p.media.thumb)} alt="" class:blur={isExplicit(p.nudity_level)} />
+				<img src={media(p.media.thumb)} alt="" class:blur={blur.on && isExplicit(p.nudity_level)} />
 				<div class="t">{p.title ?? p.filename} <span class="muted">{p.decade ?? ''}</span></div>
 			</a>
 		{/each}
