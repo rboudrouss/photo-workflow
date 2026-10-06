@@ -15,7 +15,8 @@ et partagé : il coordonne, il ne calcule pas.
   est fait par un worker en ligne qui a le modèle d'embedding chargé : il attend les requêtes en long-poll et
   répond en quelques dizaines de millisecondes (`queries.py`). Sans worker en ligne, l'option disparaît de
   l'interface et l'API répond 503 ;
-- limites mémoire par conteneur : 768 Mo Postgres, 512 Mo API, 256 Mo watcher, 256 Mo web.
+- limites mémoire par conteneur : 768 Mo Postgres, 768 Mo API, 512 Mo watcher, 256 Mo web. L'ingestion
+  décode les scans JPEG en taille réduite (`images.open_for_ingest`) : un scan de 40 Mpx tient en ~120 Mo.
 
 Le calcul vient des machines perso (`docker-compose.worker.yml`), approuvées depuis la page Workers.
 
@@ -42,11 +43,11 @@ et laisser `UI_PASSWORD` vide. L'authentification dans l'application évite ça 
 
 ## Création dans Coolify
 
-Pré-requis : le dépôt `rboudrouss/photo-workflow` est privé, Coolify doit y accéder via une GitHub App
-(Sources) ou une clé de déploiement.
+Le dépôt `rboudrouss/photo-workflow` est public. Coolify déploie la tête de `main` ; un changement n'est en ligne
+qu'une fois poussé puis redéployé.
 
-Dans l'interface : Projet → Nouvelle ressource → Docker Compose (GitHub App ou deploy key) → dépôt
-`rboudrouss/photo-workflow`, branche `main`, fichier compose `/docker-compose.coolify.yml`. Puis :
+Dans l'interface : Projet → Nouvelle ressource → Docker Compose → dépôt `rboudrouss/photo-workflow`, branche
+`main`, fichier compose `/docker-compose.coolify.yml`. Puis :
 
 1. domaine du service `web` : `https://photoflow.rboud.com` ;
 2. variables : `PHOTOS_DIR` si le dossier des photos n'est pas `/tank/files/files/photoflow`,
@@ -54,18 +55,9 @@ Dans l'interface : Projet → Nouvelle ressource → Docker Compose (GitHub App 
    site, à lire dans l'onglet variables ;
 3. déployer. L'API crée ou met à jour le schéma à chaque démarrage, rien à lancer à la main.
 
-Avec la CLI (`~/go/bin/coolify`, contexte à créer avec un jeton API de coolify.rboud.com) :
-
-```bash
-coolify context add rboud https://coolify.rboud.com <token> --default
-coolify server list ; coolify project list ; coolify github list        # uuids
-coolify app create github --server-uuid <srv> --project-uuid <proj> --environment-name production \
-  --github-app-uuid <gh> --git-repository rboudrouss/photo-workflow --git-branch main \
-  --build-pack dockercompose --ports-exposes 3000 --name photoflow \
-  --compose-domain "web=https://photoflow.rboud.com"
-# fichier compose : /docker-compose.coolify.yml (voir `coolify app update --help`, sinon dans l'interface)
-coolify deploy ...
-```
+Avec la CLI (`~/go/bin/coolify`, déjà configurée avec un jeton de coolify.rboud.com) : `coolify app list` pour
+l'uuid, `coolify deploy uuid <uuid>` pour redéployer après un push. Coolify relit le compose depuis le dépôt à
+chaque déploiement : le modifier dans l'interface ne sert à rien, il faut le commiter.
 
 ## Le dossier des photos
 
@@ -80,12 +72,20 @@ coolify deploy ...
 L'API monte le dossier en écriture, le watcher en lecture seule. C'est ce dossier qu'il faut sauvegarder, avec
 la base.
 
-## Après le premier déploiement
+## Brancher des workers
 
-- sur une machine perso : `docker compose -f docker-compose.worker.yml up -d --build`, puis « Approuver » sur
-  la page Workers ;
-- le regroupement des visages (HDBSCAN, lourd : minutes de CPU à 20 000 visages) est une **tâche déléguée à un
-  worker** : bouton « Regrouper les visages et reconstruire les séries » sur la page Workers. Le serveur envoie
-  les vecteurs, le worker calcule, le serveur applique les étiquettes puis reconstruit les séries lui-même
-  (léger : requêtes pgvector, de l'ordre de la minute à 10 000 photos). `photoflow faces cluster` et
-  `photoflow series build` restent utilisables depuis une machine connectée à la base.
+Sur chaque machine qui calcule, portable comme grosse machine (commandes complètes dans le README) :
+
+```bash
+docker compose -f docker-compose.worker.yml up -d --build                     # + --profile vlm / vlm-host / claude
+```
+
+puis « Approuver » sur la page Workers, et « Analyser N photos » en cochant les extracteurs voulus. Une grosse
+machine n'a rien de particulier côté serveur : elle déclare un VLM de rang plus élevé (32B → 32) et reprend
+donc d'abord les photos jamais décrites, puis celles décrites par un modèle plus petit.
+
+Le regroupement des visages (HDBSCAN, lourd : minutes de CPU à 20 000 visages) est une **tâche déléguée à un
+worker** : bouton « Regrouper les visages et reconstruire les séries » sur la page Workers. Le serveur envoie
+les vecteurs, le worker calcule, le serveur applique les étiquettes puis reconstruit les séries lui-même
+(léger : requêtes pgvector, de l'ordre de la minute à 10 000 photos). `photoflow faces cluster` et
+`photoflow series build` restent utilisables en dépannage depuis le terminal du service `api`.

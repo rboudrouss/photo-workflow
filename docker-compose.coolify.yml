@@ -104,6 +104,7 @@ services:
       - API_INTERNAL=http://api:8000
       # adapter-node refuse les corps > 512 Ko par defaut : les scans font plusieurs Mo. L'API borne a 200 Mo par fichier.
       - BODY_SIZE_LIMIT=1G
+      # Vide : le navigateur appelle /api sur le site meme, relaye par le hook.
       - PUBLIC_API_BASE=
       # Origine vue du navigateur (controle anti-CSRF, URLs absolues) deduite des en-tetes poses par Traefik.
       # Ne pas utiliser ORIGIN=${SERVICE_FQDN_WEB} : Coolify fournit le domaine sans schema et Node le refuse.
@@ -115,7 +116,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/worker/pair',{method:'POST'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 5

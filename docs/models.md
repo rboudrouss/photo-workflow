@@ -1,18 +1,23 @@
 # Choix des modèles
 
-Trois familles de modèles, trois contextes d'exécution. Les modèles spécialisés (embeddings, visages) sont
-petits et tournent partout. Le modèle vision-langage (VLM) est le poste lourd et le vrai choix.
+Les modèles spécialisés (embeddings, visages, nudité) sont petits et tournent partout. Le modèle
+vision-langage (VLM) est le poste lourd et le vrai choix. Toute machine qui calcule est un worker
+(`docker-compose.worker.yml`) : seuls son VLM et son GPU changent.
 
 ## Contextes
 
-| Contexte | Matériel | Ce qui tourne | Objectif |
+| Worker | Matériel | VLM | Objectif |
 |---|---|---|---|
-| dev (`docker-compose.dev.yml`) | ta machine : GTX 970 4 Go, 23 Go RAM, 16 cœurs | tout en CPU, VLM 4B | valider la tuyauterie, le schéma, le prompt, l'interface |
-| prod (`docker-compose.yml`) | ≥ 128 Go unifiés, Spark ou Mac Studio | VLM 32B, SigLIP so400m | passe complète sur 100k photos |
-| cloud (optionnel) | API Anthropic, clé Console | Claude | référence qualité sur un échantillon, ou passe complète si le local déçoit |
+| machine perso (profil `vlm`) | CPU, ~16 Go RAM | Qwen3-VL 4B Q4 | embeddings, visages, nudité sur tout le fonds ; quelques légendes |
+| grosse machine, GPU NVIDIA (`docker-compose.worker.gpu.yml`, profil `vlm`) | DGX Spark, ≥ 128 Go unifiés | Qwen3-VL 32B ou 30B-A3B, Q8 | passe complète des légendes sur 100k photos |
+| Mac Studio (profil `vlm-host`) | ≥ 128 Go unifiés, Metal | idem, llama-server natif | idem |
+| Claude (profil `claude`) | aucun | Claude Opus / Sonnet | référence qualité, ou passe complète si le local déçoit |
 
-La GTX 970 (Maxwell) n'est plus supportée par les builds CUDA récents de PyTorch et onnxruntime. Le compose dev
-n'essaie pas de l'utiliser. Si tu veux tenter : installer `onnxruntime-gpu` et un torch cu126, et `DEVICE=cuda`.
+Le compose de dev (`docker-compose.dev.yml`) fait tout en CPU avec le 4B pour valider la tuyauterie, le schéma,
+le prompt et l'interface.
+
+La GTX 970 (Maxwell) de la machine de dev n'est plus supportée par les builds CUDA récents de PyTorch et
+onnxruntime : rester en `DEVICE=cpu`.
 
 ## VLM : titre, description, époque, lieu, tags
 
@@ -26,8 +31,8 @@ Fichiers GGUF officiels Qwen (modèle + projecteur vision `mmproj`), télécharg
 | Qwen3-VL-2B-Instruct | 1,5 / 2,5 Go | très rapide | faible : descriptions génériques, époque souvent fausse | tests de tuyauterie uniquement |
 | **Qwen3-VL-4B-Instruct** | 3 / 5 Go | rapide | correcte sur le sujet et la scène, faible sur époque et lieu | **dev sur ta machine** |
 | Qwen3-VL-8B-Instruct | 5 / 9 Go | moyenne | nettement meilleure, lit bien le texte | dev si tu as la patience en CPU |
-| **Qwen3-VL-30B-A3B-Instruct** (MoE) | 18 / 32 Go | rapide (3 Go actifs par token) | proche du 32B sur description, un peu en dessous en raisonnement | **prod si le débit prime** : 100k photos en quelques jours |
-| **Qwen3-VL-32B-Instruct** (dense) | 19 / 35 Go | lente (tout le modèle par token) | la meilleure qualité qui tient confortablement en 128 Go | **prod si la qualité prime** |
+| **Qwen3-VL-30B-A3B-Instruct** (MoE) | 18 / 32 Go | rapide (3 Go actifs par token) | proche du 32B sur description, un peu en dessous en raisonnement | **grosse machine si le débit prime** : 100k photos en quelques jours |
+| **Qwen3-VL-32B-Instruct** (dense) | 19 / 35 Go | lente (tout le modèle par token) | la meilleure qualité qui tient confortablement en 128 Go | **grosse machine si la qualité prime** |
 | Qwen3-VL-235B-A22B-Instruct (MoE) | 130 / 250 Go | lente | la meilleure, mais ne tient qu'en 256 Go et en Q4 | seulement si la machine est en 256 Go |
 
 Pros et cons de la famille Qwen3-VL : excellente lecture de texte, bon français, support natif du JSON contraint,
@@ -44,23 +49,34 @@ invalide retenté trois fois. La grammaire coûte environ 15 % de vitesse.
 Alternatives à considérer si Qwen déçoit sur un point précis : Gemma 3 27B (bon français, moins bon en OCR),
 InternVL3, Mistral Small 3.x vision. Tous passent par la même interface OpenAI-compatible, donc sans code.
 
-### Recommandation prod
+### Recommandation grosse machine
 
-Lancer les deux candidats sur les mêmes 300 photos et comparer dans l'interface (les deux légendes s'affichent
-côte à côte) :
+Comparer les deux candidats sur les mêmes 300 photos avant la passe complète. `photoflow vlm run` prend toujours
+les photos les plus anciennes du fonds : lancé depuis le compose de dev avec `LLM_BASE_URL` pointé sur le
+llama-server de la grosse machine, il produit les deux légendes côte à côte dans l'interface.
 
 ```
-LLM_HF_REPO=Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF:Q8_0   # puis
+LLM_HF_REPO=Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF:Q8_0   # sur la grosse machine, puis
 LLM_HF_REPO=Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0
-photoflow vlm run --backend llama --limit 300
+photoflow vlm run --backend llama --limit 300           # en dev, LLM_BASE_URL=http://<grosse-machine>:8080/v1
 ```
 
-Comme les sources sont nommées d'après le modèle, rien ne s'écrase.
+Comme les sources sont nommées d'après le modèle, rien ne s'écrase. Ensuite, la passe complète se lance depuis
+la page Workers. Le rang se déduit du nom (30B-A3B → 30, 32B → 32) : un worker reprend les photos jamais
+décrites, puis celles décrites par un modèle de rang inférieur, jamais l'inverse.
 
-### Claude (API Anthropic)
+### Claude
 
-Via une clé API Console, facturée à l'usage. **Pas le token de l'abonnement claude.ai**, c'est contraire aux
-conditions d'utilisation et les limites ne tiendraient pas.
+Deux accès, au choix du worker `claude` (`.env.worker.example`) :
+
+- **clé API Console** (`ANTHROPIC_API_KEY`), facturée à l'usage : appel direct, sorties structurées, API Batches
+  possible. Prioritaire si les deux sont définis ;
+- **abonnement Claude** (`CLAUDE_CODE_OAUTH_TOKEN`, créé avec `claude setup-token`) : chaque photo passe par le
+  CLI Claude Code en mode non interactif (`claude -p`, sans outils, JSON imposé par `--json-schema`). Compte dans
+  les limites d'usage de l'abonnement : bien pour quelques centaines de photos, pas pour 100k. Mesuré : 11 à
+  14 s par photo avec Opus.
+
+Coût à l'API :
 
 | Modèle | Entrée / sortie ($ par M tokens) | 100k photos, API Batches | Pour |
 |---|---|---|---|
@@ -71,10 +87,10 @@ conditions d'utilisation et les limites ne tiendraient pas.
 Estimation à 1500 tokens d'entrée et 200 de sortie par photo, mode batch à moitié prix. À recaler sur un
 échantillon réel : le log du worker affiche les tokens consommés à chaque appel.
 
-Deux usages prévus :
+Autres usages, depuis une machine reliée à la base :
 
 ```
-photoflow vlm run --backend anthropic --limit 50                 # synchrone, pour comparer
+photoflow vlm run --backend anthropic --limit 50                 # synchrone, pour comparer (dev)
 photoflow claude-batch submit --limit 5000                       # asynchrone, moitié prix
 photoflow claude-batch status
 photoflow claude-batch collect msgbatch_xxx
@@ -88,12 +104,14 @@ si l'API renvoie une erreur sur ce paramètre.
 
 | Modèle | Dims | Pour | Pros | Cons |
 |---|---|---|---|---|
-| `google/siglip2-base-patch16-256` | 768 | dev | rapide en CPU, multilingue | recherche un peu moins fine |
-| `google/siglip2-so400m-patch16-384` | 1152 | prod | meilleure qualité de recherche texte→image, toujours rapide | 2 à 3 fois plus lent que base |
+| `google/siglip2-base-patch16-256` | 768 | défaut du serveur | rapide en CPU, multilingue | recherche un peu moins fine |
+| `google/siglip2-so400m-patch16-384` | 1152 | meilleure qualité | meilleure qualité de recherche texte→image, toujours rapide | 2 à 3 fois plus lent que base |
 | `jinaai/jina-clip-v2` | 1024 | alternative | très multilingue, bon sur le texte long | nécessite `trust_remote_code` |
 
-Changer de modèle = changer `EMBEDDING_DIM`, recréer la base (ou la table `image_embeddings` et son index), puis
-`photoflow jobs enqueue embedding --force`.
+Le modèle est fixé sur le serveur (`EMBEDDING_MODEL` / `EMBEDDING_DIM` du service `api`, base 768 par défaut)
+et imposé à chaque worker à sa connexion, pour que tous les vecteurs soient comparables. En changer = changer
+les deux variables, recréer la table `image_embeddings` et son index, puis relancer `embedding` sur tout le
+fonds depuis la page Workers.
 
 ## Visages
 
@@ -120,11 +138,13 @@ modèle local, qui ne refuse pas grâce au JSON contraint.
 | | DGX Spark | Mac Studio |
 |---|---|---|
 | Architecture | arm64 + CUDA | arm64 + Metal |
-| llama.cpp | image Docker `server-cuda` publiée en amd64 seulement : construire l'image localement (`docker build -f .devops/cuda.Dockerfile --target server` dans le dépôt llama.cpp, base CUDA arm64) ou lancer `llama-server` en natif | Docker n'a pas accès au GPU : `brew install llama.cpp` puis `llama-server` natif, profil `mac` |
+| Worker | `-f docker-compose.worker.gpu.yml --profile vlm` | `--profile vlm-host`, `llama-server` natif sur l'hôte |
+| llama.cpp | si l'image `server-cuda` n'existe pas en arm64 : la construire (`docker build -f .devops/cuda.Dockerfile --target server -t llama-server-cuda .` dans le dépôt llama.cpp) et `LLM_IMAGE=llama-server-cuda`, ou lancer `llama-server` en natif avec `--profile vlm-host` | Docker n'a pas accès au GPU : `brew install llama.cpp` puis `llama-server` natif |
 | Alternative plus rapide pour 100k photos | vLLM (meilleur débit par lots, même API) | MLX-VLM via `mlx_vlm.server` (même API) |
-| Workers SigLIP / InsightFace | profil `cuda`, `DEVICE=cuda` | CPU dans Docker (suffisant), ou natif avec `DEVICE=mps` |
+| Workers SigLIP / InsightFace | `DEVICE=cuda` (surcouche GPU) | CPU dans Docker, suffisant |
+| Parallélisme VLM | `VLM_WORKERS=2` : deux workers VLM et `-np 2` côté llama-server | `VLM_WORKERS=2` et `-np 2` sur le llama-server natif |
 
-Commande native équivalente au service `llm` du compose :
+Commande native équivalente au service `llm` de la surcouche GPU :
 
 ```
 llama-server -hf Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0 --host 0.0.0.0 --port 8080 -c 16384 -np 2 --jinja -ngl 999 --flash-attn on
@@ -132,7 +152,7 @@ llama-server -hf Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0 --host 0.0.0.0 --port 8080
 
 ## Débit attendu, pour planifier
 
-| Étape | dev (CPU) | prod |
+| Étape | machine perso (CPU) | grosse machine |
 |---|---|---|
 | ingestion | 100k photos en ~8 h (dérivés JPEG) | 2 à 3 h |
 | embeddings | ~6 h | < 1 h |

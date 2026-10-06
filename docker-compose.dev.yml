@@ -1,9 +1,9 @@
-# Environnement de DEV : ta machine (GTX 970 4 Go, 23 Go RAM, 16 coeurs).
-# Tout tourne sur CPU, modeles petits. Objectif : valider la tuyauterie et le schema, pas la qualite.
+# Environnement de DEV, tout en local : base, API, interface, watcher, et des workers branches directement sur la
+# base (file commune, sans appairage). Tout en CPU, modeles petits : valider la tuyauterie, le schema, le prompt
+# et l'interface, pas la qualite. Pas de mot de passe. Le serveur reel est docker-compose.coolify.yml.
 #
-#   docker compose -f docker-compose.dev.yml up -d --build
-#   docker compose -f docker-compose.dev.yml run --rm api photoflow db init
-#   docker compose -f docker-compose.dev.yml run --rm api photoflow ingest /photos/samples
+#   docker compose -f docker-compose.dev.yml up -d --build        # la base est creee au demarrage de l'API
+#   docker compose -f docker-compose.dev.yml run --rm api photoflow ingest /photos
 #
 # Voir docs/models.md pour les choix de modeles.
 

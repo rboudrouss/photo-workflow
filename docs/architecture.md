@@ -22,21 +22,24 @@ dossier photos ──► ingest ──► photos + jobs ──► worker(s) ─�
 |---|---|---|
 | Postgres + pgvector | seule base : métadonnées, JSON des extracteurs, vecteurs, plein texte français, file de jobs | service `db` |
 | `photoflow` (Python) | CLI, ingestion, worker, API | `backend/` |
-| extracteurs | `embedding`, `faces`, `vlm` | `backend/src/photoflow/extractors/` |
-| backends VLM | OpenAI-compatible (llama.cpp, vLLM, MLX, Ollama) et Anthropic | `extractors/vlm_backends/` |
-| llama-server | sert le VLM local derrière une API HTTP | service `llm` ou natif sur l'hôte |
-| web (SvelteKit) | grille, recherche, page photo, visages, statut | `web/` |
+| extracteurs | `physical`, `embedding`, `faces`, `nudity`, `vlm` | `backend/src/photoflow/extractors/` |
+| backends VLM | OpenAI-compatible (llama.cpp, vLLM, MLX, Ollama), Anthropic (clé API), Claude Code (abonnement) | `extractors/vlm_backends/` |
+| llama-server | sert le VLM local derrière une API HTTP | service `llm` du worker, ou natif sur l'hôte |
+| web (SvelteKit) | grille, recherche, page photo, visages, séries, workers, ajout ; relais vers l'API et mot de passe | `web/` |
+| watcher | ingère ce qui apparaît dans le dossier des photos | service `watcher` |
 
 ## File de jobs
 
 Table `jobs` avec contrainte unique `(photo_id, extractor)`. Un worker réclame un lot avec
 `SELECT ... FOR UPDATE SKIP LOCKED`, donc plusieurs workers sur plusieurs machines peuvent se partager la même
 base sans coordination. Un job échoué est retenté jusqu'à `WORKER_MAX_ATTEMPTS`, puis marqué `failed`
-(`photoflow jobs retry-failed` pour relancer). Les jobs `running` abandonnés depuis plus d'une heure sont remis
-en file au démarrage d'un worker.
+(`photoflow jobs retry-failed` pour relancer).
 
-Chaque worker ne gère que les extracteurs qu'on lui donne. Cela permet par exemple un worker GPU sur la grosse
-machine pour le VLM et un worker CPU ailleurs pour les visages, ou de couper le VLM sans bloquer le reste.
+Deux façons de consommer la file : les workers distants (cas normal, section suivante) ne voient que les jobs
+que le serveur leur a réservés ; les workers branchés directement sur la base (compose de dev) prennent la file
+commune (`reserved_for IS NULL`) et leurs jobs `running` abandonnés depuis plus d'une heure sont remis en file au
+démarrage d'un worker. Chaque worker ne gère que les extracteurs qu'on lui donne, ce qui permet de couper le VLM
+sans bloquer le reste.
 
 ## Ajout de photos
 
@@ -56,14 +59,16 @@ vers la photo existante. Chaque ajout met en file les extracteurs par défaut.
 
 ## Workers distants (calcul décentralisé)
 
-Déploiement visé : un petit serveur public (`docker-compose.server.yml`) porte la base, l'API, l'interface et un
-reverse proxy ; le calcul vient de machines perso qui lancent `docker-compose.worker.yml`.
+Le serveur (`docker-compose.coolify.yml`, voir `docs/deploy.md`) porte la base, l'API, l'interface et le
+watcher, sans aucun modèle. Tout le calcul vient de machines qui lancent `docker-compose.worker.yml`, du portable
+à la grosse machine (`docker-compose.worker.gpu.yml` pour un GPU NVIDIA, profil `vlm-host` pour un VLM natif
+sur Mac).
 
 ```
 machine perso (worker)                         serveur photoflow.example.com
  ┌───────────────────────────┐    HTTPS sortant  ┌──────────────────────────────┐
- │ worker-ml / worker-vlm    │ ───────────────►  │ Caddy ─► API ─► Postgres      │
- │ (+ llama.cpp en option)   │  jeton porteur    │   /api/worker/* : jeton       │
+ │ worker-ml / worker-vlm    │ ───────────────►  │ web ─► API ─► Postgres        │
+ │ (+ llama.cpp / Claude)    │  jeton porteur    │   /api/worker/* : jeton       │
  │ aucun port ouvert         │ ◄───────────────  │   le reste : mot de passe     │
  └───────────────────────────┘  images, jobs     └──────────────────────────────┘
                                                         ▲ navigateur : page « Workers »
@@ -104,8 +109,9 @@ Principes :
   plus ancienne que celle du worker. Pour le VLM, d'abord les photos sans légende machine, puis celles dont la
   meilleure légende vient d'un modèle de rang inférieur (`modelrank.py` : `4B` → 4, `32B` → 32, Claude → 1000,
   `VLM_RANK` pour forcer). Un worker au 4B ne retouche donc jamais une photo déjà vue par le 32B.
-- **Plusieurs processus, un jeton** : worker-ml et worker-vlm d'une même machine partagent le jeton ; le serveur
-  fusionne leurs battements (`workers.instances`). Le modèle d'embedding est imposé par le serveur au premier
+- **Plusieurs processus, un jeton** : les services d'une même machine (worker-ml, worker-vlm et ses répliques,
+  worker-claude) partagent le jeton ; le serveur fusionne leurs battements (`workers.instances`) et affiche
+  tous les modèles VLM actifs. Le modèle d'embedding est imposé par le serveur au premier
   battement, pour que tous les vecteurs soient comparables.
 - **Tâches de maintenance** (`tasks`, `workers.request_task`) : le regroupement des visages est trop lourd pour
   le serveur à partir de quelques dizaines de milliers de visages. Le bouton de la page Workers crée une tâche
@@ -115,11 +121,9 @@ Principes :
 - **Requêtes de recherche sémantique** : quand l'API n'a pas torch (serveur de coordination), elle dépose la
   requête texte dans une file en mémoire (`queries.py`) ; un worker en ligne avec le modèle d'embedding la prend
   en long-poll, l'encode et renvoie le vecteur. Latence de l'ordre de 100 ms, 503 après 8 s sans réponse.
-- Les workers branchés directement sur la base (grosse machine) continuent de prendre la file commune
-  (`reserved_for IS NULL`) ; les deux modes coexistent.
 
-Le mot de passe de l'interface est géré par Caddy (`deploy/Caddyfile`), pas par l'application : les routes
-`/api/workers/*` (réserver, rendre) sont donc protégées par le même mot de passe que le reste.
+Le mot de passe de l'interface est porté par le site (`web/src/hooks.server.ts`, Basic) : il couvre tout, y
+compris les routes `/api/workers/*` (réserver, rendre), sauf `/api/worker/*` réservé aux jetons des workers.
 
 ## Ajouter un extracteur
 
@@ -139,6 +143,8 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 | `photos` | id | fichier, dimensions, pHash, statut |
 | `jobs` | (photo, extractor) | file de travail ; `reserved_for` = worker distant désigné |
 | `workers` | id | worker distant : nom, jeton haché, état de ses instances |
+| `pair_requests` | code | demandes d'appairage en attente d'approbation (15 min) |
+| `tasks` | id | tâches de maintenance déléguées à un worker (`faces_cluster`) |
 | `extractions` | (photo, extractor) | JSON brut de chaque extracteur, version, modèle |
 | `captions` | (photo, source) | titre, description, analyse structurée, `model_rank` ; `tsv` généré pour le plein texte |
 | `image_embeddings` | photo | vecteur SigLIP, index HNSW cosinus |
@@ -150,9 +156,14 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 
 ## Interface
 
-Le front ne parle qu'à l'API, en JSON, depuis le navigateur (`PUBLIC_API_BASE`). Il n'y a pas de rendu côté
-serveur dépendant de la base, ce qui garde le déploiement simple : l'API et le front peuvent être sur des
-machines différentes.
+Le front ne parle qu'à l'API, en JSON, depuis le navigateur. En production le site relaie `/api` et `/media`
+vers l'API interne (une seule origine, pas de CORS) ; en dev le navigateur appelle l'API directement
+(`PUBLIC_API_BASE`). Aucun rendu côté serveur ne dépend de la base.
+
+La recherche et ses filtres (texte, objet, scène, époque, nudité, description par VLM, tags) vivent dans l'URL :
+un lien se partage et le retour arrière retrouve la même page. Les tags sont comparés sans casse ni accents ;
+les propositions (`/api/tags`) sont calculées sur les résultats courants. L'interrupteur « flouter » de la
+barre du haut vaut pour toutes les pages.
 
 L'interface est aussi l'outil de correction : chaque sauvegarde crée ou met à jour la légende `human`, qui prime
 ensuite partout. Nommer un groupe de visages crée une personne et l'attache à tout le groupe.

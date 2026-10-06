@@ -51,6 +51,8 @@ function authorized(request: Request): boolean {
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const { pathname, search } = event.url;
+	// Sonde du conteneur (healthcheck) : sans mot de passe, ne revele rien.
+	if (pathname === '/healthz') return new Response('ok');
 	const isWorker = pathname.startsWith(WORKER_PREFIX);
 
 	if (crossSiteForm(event.request)) {

@@ -1,7 +1,7 @@
 """Worker : reclame des jobs, lance les extracteurs, persiste ou renvoie les resultats.
 
 Deux sources de jobs, meme boucle :
-- LocalSource  : connecte a Postgres (compose dev / grosse machine), SKIP LOCKED sur la file commune.
+- LocalSource  : connecte a Postgres (compose dev), SKIP LOCKED sur la file commune.
 - RemoteSource : machine perso sans acces a la base. Uniquement des requetes sortantes vers l'API avec un
   jeton ; les images sont telechargees dans un dossier temporaire, les resultats renvoyes en JSON.
 """

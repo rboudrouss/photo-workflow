@@ -7,14 +7,14 @@ produit, par quel moyen, dans quelle table, et avec quelles limites.
 
 | Étape | Déclenchement | Modèle / méthode | Tables écrites | Coût indicatif (CPU dev) |
 |---|---|---|---|---|
-| Ingestion | `photoflow ingest` | Pillow, SHA-256, pHash | `photos` | < 0,5 s / photo |
+| Ingestion | page « Ajouter », watcher, `photoflow ingest` | Pillow, SHA-256, pHash | `photos` | < 0,5 s / photo |
 | `physical` | job | calcul direct, sans modèle | `extractions` | < 0,05 s / photo |
 | `embedding` | job | SigLIP 2 | `image_embeddings`, `extractions` | 0,1 à 0,3 s / photo |
 | `faces` | job | InsightFace buffalo_l | `faces`, `extractions` | 0,3 à 1 s / photo |
 | `nudity` | job | NudeNet (détecteur de parties du corps) | `photos.nudity_level`, `extractions` | 0,1 à 0,3 s / photo |
-| `vlm` | job | Qwen3-VL (local) ou Claude (API) | `captions`, `extractions`, `photos.nudity_level` | 20 à 60 s / photo en CPU dev, 2 à 8 s sur grosse machine |
-| Clustering visages | `photoflow faces cluster` | HDBSCAN (scikit-learn) | `faces.cluster_id`, `faces.person_id` | quelques secondes pour 100k visages |
-| Séries | `photoflow series build` | graphe kNN pgvector + visages + physique + pHash, composantes connexes | `series`, `series_edges`, `photos.series_id` | quelques minutes pour 100k photos |
+| `vlm` | job | Qwen3-VL (local) ou Claude (API ou abonnement) | `captions`, `extractions`, `photos.nudity_level` | 20 à 60 s / photo en CPU dev, 2 à 8 s sur grosse machine |
+| Clustering visages | bouton de la page Workers (tâche `faces_cluster` sur un worker) | HDBSCAN (scikit-learn) | `faces.cluster_id`, `faces.person_id` | quelques secondes pour 100k visages |
+| Séries | à la suite du clustering, sur le serveur (`series build`) | graphe kNN pgvector + visages + physique + pHash, composantes connexes | `series`, `series_edges`, `photos.series_id` | quelques minutes pour 100k photos |
 | Correction humaine | interface | toi | `captions` (source `human`) | |
 
 Tout résultat brut est aussi conservé en JSON dans `extractions` (clé `photo_id` + `extractor`, avec `version`
@@ -48,7 +48,7 @@ Les bords dentelés ne sont pas détectés pour l'instant : trop dépendant du f
 
 ## 2. Embeddings image (`image_embeddings`)
 
-- **Modèle** : SigLIP 2 (`google/siglip2-base-patch16-256` en dev, `so400m-patch16-384` en prod). Encodeur
+- **Modèle** : SigLIP 2 (`google/siglip2-base-patch16-256` par défaut, `so400m-patch16-384` possible, choisi sur le serveur). Encodeur
   image et encodeur texte dans le même espace, multilingue, donc une requête en français fonctionne.
 - **Entrée** : le dérivé web (1600 px), redimensionné par le processeur du modèle.
 - **Sortie** : un vecteur normalisé (768 ou 1152 dims) par photo. Index HNSW cosinus dans Postgres (pgvector).

@@ -1,16 +1,21 @@
-# Worker DISTANT : a lancer sur une machine perso, sans rien configurer.
+# WORKER : toute machine qui prete sa puissance de calcul, du portable au DGX Spark. Rien a configurer.
 #
-#   docker compose -f docker-compose.worker.yml up -d --build                 # visages, embeddings, nudite, physique
-#   docker compose -f docker-compose.worker.yml --profile vlm up -d --build   # + VLM local (llama.cpp)
-#   docker compose -f docker-compose.worker.yml --profile claude up -d --build   # + VLM Claude (cle API ou abonnement)
+#   docker compose -f docker-compose.worker.yml up -d --build                        # physique, embeddings, visages, nudite
+#   docker compose -f docker-compose.worker.yml --profile vlm up -d --build          # + VLM local (llama.cpp dans Docker)
+#   docker compose -f docker-compose.worker.yml --profile vlm-host up -d --build     # + VLM natif sur l'hote (Mac, vLLM...)
+#   docker compose -f docker-compose.worker.yml --profile claude up -d --build       # + VLM Claude (cle API ou abonnement)
+#
+# GPU NVIDIA (Linux, DGX Spark) : ajouter `-f docker-compose.worker.gpu.yml` apres le premier -f.
+# Les profils se cumulent. Pour arreter un profil : `docker compose -f docker-compose.worker.yml stop <service>`
+# (un `up` sans le profil ne coupe pas ses conteneurs deja lances).
 #
 # Puis ouvrir la page « Workers » du site : la machine apparait « en attente », cliquer « Approuver ».
 # Le worker n'ouvre aucun port et n'a pas acces a la base : il ne fait que des requetes sortantes vers le
 # serveur, telecharge les images, calcule, renvoie les resultats. Son jeton, recu a l'approbation, est garde
-# dans le volume photoflow-worker-data.
+# dans le volume photoflow-worker-data et partage par tous les services de la machine.
 #
-# Facultatif, dans un .env a cote : SERVER_URL (autre serveur), WORKER_NAME (nom propose), WORKER_EXTRACTORS,
-# LLM_HF_REPO / LLM_THREADS / VLM_RANK (VLM), ANTHROPIC_API_KEY ou CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_MODEL (Claude), DEVICE=cuda (+ decommenter les blocs deploy, voir docs/models.md).
+# Le modele d'embedding et la taille d'image du VLM sont imposes par le serveur. Le reste se regle dans un .env
+# a cote (tout est facultatif, voir .env.worker.example et docs/models.md pour le choix du VLM).
 
 name: photoflow-worker
 
@@ -19,15 +24,11 @@ x-worker: &worker
   env_file:
     - path: .env
       required: false
-  environment:
+  environment: &worker-env
     SERVER_URL: ${SERVER_URL:-https://photoflow.rboud.com}
     WORKER_NAME: ${WORKER_NAME:-}
     DATA_DIR: /data
     DEVICE: ${DEVICE:-cpu}
-    # Le modele d'embedding est impose par le serveur a la connexion ; ne pas le fixer ici.
-    VLM_BACKEND: llama
-    LLM_BASE_URL: http://llm:8080/v1
-    VLM_MAX_SIDE: ${VLM_MAX_SIDE:-896}
   volumes:
     - photoflow-worker-data:/data   # jeton d'appairage + cache des modeles (SigLIP, InsightFace, NudeNet)
   restart: unless-stopped
@@ -37,14 +38,56 @@ services:
     <<: *worker
     command: photoflow worker --extractors ${WORKER_EXTRACTORS:-physical,embedding,faces,nudity}
 
+  # ---------------------------------------------------------------- VLM local, llama.cpp dans Docker
   worker-vlm:
     <<: *worker
     profiles: [vlm]
     command: photoflow worker --extractors vlm
+    environment:
+      <<: *worker-env
+      VLM_BACKEND: llama
+      LLM_BASE_URL: http://llm:8080/v1
+    # Un worker traite une photo a la fois : autant de workers que de requetes paralleles du serveur llama.
+    deploy:
+      replicas: ${VLM_WORKERS:-1}
     depends_on: [llm]
 
-  # VLM Claude : pas de modele local, chaque photo est envoyee a Claude. ANTHROPIC_API_KEY (cle Console, facturee a
-  # l'usage) si presente, sinon CLAUDE_CODE_OAUTH_TOKEN (abonnement, `claude setup-token`, passe par le CLI Claude Code).
+  llm:
+    profiles: [vlm]
+    image: ${LLM_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    # Telecharge le modele et son projecteur vision (mmproj) depuis Hugging Face au premier demarrage.
+    command: >
+      -hf ${LLM_HF_REPO:-Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M}
+      --host 0.0.0.0 --port 8080 --jinja
+      -c ${LLM_CTX:-8192} -np ${VLM_WORKERS:-1}
+      --threads ${LLM_THREADS:-8}
+      ${LLM_ARGS:-}
+    environment:
+      LLAMA_CACHE: /models
+    volumes:
+      - photoflow-worker-llm:/models
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- VLM natif sur l'hote
+  # Mac (Docker n'a pas acces au GPU Metal), ou tout serveur OpenAI-compatible deja lance hors Docker
+  # (llama-server, vLLM, MLX-VLM, Ollama). Exemple Mac : brew install llama.cpp, puis
+  #   llama-server -hf Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0 --host 0.0.0.0 --port 8080 -c 16384 -np 2 --jinja
+  worker-vlm-host:
+    <<: *worker
+    profiles: [vlm-host]
+    command: photoflow worker --extractors vlm
+    environment:
+      <<: *worker-env
+      VLM_BACKEND: llama
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      replicas: ${VLM_WORKERS:-1}
+
+  # ---------------------------------------------------------------- VLM Claude
+  # Pas de modele local, chaque photo est envoyee a Claude. ANTHROPIC_API_KEY (cle Console, facturee a l'usage)
+  # si presente, sinon CLAUDE_CODE_OAUTH_TOKEN (abonnement, `claude setup-token`, passe par le CLI Claude Code).
   worker-claude:
     <<: *worker
     build:
@@ -53,29 +96,12 @@ services:
     profiles: [claude]
     command: photoflow worker --extractors vlm
     environment:
-      SERVER_URL: ${SERVER_URL:-https://photoflow.rboud.com}
-      WORKER_NAME: ${WORKER_NAME:-}
-      DATA_DIR: /data
+      <<: *worker-env
       VLM_BACKEND: claude
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
       ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-low}
-      VLM_MAX_SIDE: ${VLM_MAX_SIDE:-1024}
-
-  llm:
-    profiles: [vlm]
-    image: ghcr.io/ggml-org/llama.cpp:server
-    command: >
-      -hf ${LLM_HF_REPO:-Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M}
-      --host 0.0.0.0 --port 8080
-      -c 8192 -np 1 --jinja
-      --threads ${LLM_THREADS:-8}
-    environment:
-      LLAMA_CACHE: /models
-    volumes:
-      - photoflow-worker-llm:/models
-    restart: unless-stopped
 
 volumes:
   photoflow-worker-data:

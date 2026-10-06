@@ -23,9 +23,6 @@ from .models import Face
 
 log = logging.getLogger(__name__)
 
-DEFAULT_PARAMS = {"min_cluster_size": 3, "min_samples": None, "epsilon": 0.0, "min_score": 0.6}
-
-
 def load_faces(session, min_score: float = 0.6) -> tuple[list[uuid.UUID], np.ndarray]:
     rows = session.execute(select(Face.id, Face.embedding).where(Face.det_score >= min_score)).all()
     ids = [r.id for r in rows]

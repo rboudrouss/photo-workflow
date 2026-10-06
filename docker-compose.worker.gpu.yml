@@ -1,0 +1,35 @@
+# Surcouche GPU NVIDIA pour docker-compose.worker.yml (Linux + nvidia-container-toolkit, DGX Spark).
+#
+#   docker compose -f docker-compose.worker.yml -f docker-compose.worker.gpu.yml --profile vlm up -d --build
+#
+# Le VLM passe entierement sur le GPU (-ngl 999). Les extracteurs de worker-ml (SigLIP, InsightFace, NudeNet)
+# restent rapides sur CPU ; DEVICE=cuda les met sur le GPU quand torch le permet.
+#
+# DGX Spark (arm64) : si l'image server-cuda n'existe pas pour arm64, la construire depuis le depot llama.cpp
+#   docker build -f .devops/cuda.Dockerfile --target server -t llama-server-cuda .
+# puis LLM_IMAGE=llama-server-cuda dans le .env. Voir docs/models.md.
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  worker-ml:
+    <<: *gpu
+    environment:
+      DEVICE: ${DEVICE:-cuda}
+
+  llm:
+    <<: *gpu
+    image: ${LLM_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    command: >
+      -hf ${LLM_HF_REPO:-Qwen/Qwen3-VL-32B-Instruct-GGUF:Q8_0}
+      --host 0.0.0.0 --port 8080 --jinja
+      -c ${LLM_CTX:-16384} -np ${VLM_WORKERS:-1}
+      -ngl 999 --flash-attn on
+      ${LLM_ARGS:-}

@@ -8,7 +8,6 @@ import re
 import unicodedata
 from pathlib import Path
 
-from PIL import Image
 from sqlalchemy import select
 
 from . import images, queue
@@ -23,20 +22,6 @@ def iter_files(root: Path):
     for p in sorted(root.rglob("*")):
         if p.is_file() and p.suffix.lower() in images.SUPPORTED_EXT and not p.name.startswith("."):
             yield p
-
-
-def _exif_dict(img: Image.Image) -> dict | None:
-    try:
-        exif = img.getexif()
-    except Exception:
-        return None
-    if not exif:
-        return None
-    out = {}
-    for k, v in exif.items():
-        if isinstance(v, (int, float, str)):
-            out[str(k)] = v
-    return out or None
 
 
 class Duplicate(Exception):

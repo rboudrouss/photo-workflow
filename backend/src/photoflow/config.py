@@ -94,9 +94,5 @@ class Settings(BaseSettings):
     def models_dir(self) -> Path:
         return self.data_dir / "models"
 
-    @property
-    def batches_dir(self) -> Path:
-        return self.data_dir / "batches"
-
 
 settings = Settings()
