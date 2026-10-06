@@ -67,7 +67,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const target = env.API_INTERNAL?.replace(/\/$/, '');
 	if (target && PROXIED.some((p) => pathname.startsWith(p))) {
 		const headers = new Headers(event.request.headers);
-		headers.delete('host');
+		// En-tetes de transport propres a la connexion entrante : undici refuse de les rejouer (expect: 100-continue
+		// envoye par curl pour les gros corps, etc.). La longueur est recalculee sur le flux.
+		for (const h of ['host', 'expect', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'content-length'])
+			headers.delete(h);
 		headers.delete('authorization'); // le mot de passe du site ne va pas plus loin ; les workers ne passent pas ici
 		if (isWorker) headers.set('authorization', event.request.headers.get('authorization') ?? '');
 		const init: RequestInit & { duplex?: 'half' } = {
@@ -77,7 +80,18 @@ export const handle: Handle = async ({ event, resolve }) => {
 			duplex: 'half',
 			redirect: 'manual'
 		};
-		const upstream = await fetch(target + pathname + search, init);
+		let upstream: Response;
+		try {
+			upstream = await fetch(target + pathname + search, init);
+		} catch (e: any) {
+			// Cause la plus frequente : corps au-dela de BODY_SIZE_LIMIT (adapter-node, 512 Ko par defaut).
+			const cause = e?.cause?.message ?? e?.message ?? String(e);
+			console.error(`[relais] ${event.request.method} ${pathname} : ${cause}`);
+			return new Response(JSON.stringify({ detail: `relais vers l'API impossible : ${cause}` }), {
+				status: 502,
+				headers: { 'content-type': 'application/json' }
+			});
+		}
 		const out = new Headers(upstream.headers);
 		out.delete('content-encoding');
 		out.delete('content-length');

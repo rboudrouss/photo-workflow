@@ -102,6 +102,8 @@ services:
     environment:
       - SERVICE_FQDN_WEB_3000
       - API_INTERNAL=http://api:8000
+      # adapter-node refuse les corps > 512 Ko par defaut : les scans font plusieurs Mo. L'API borne a 200 Mo par fichier.
+      - BODY_SIZE_LIMIT=1G
       - PUBLIC_API_BASE=
       # Origine vue du navigateur (controle anti-CSRF, URLs absolues) deduite des en-tetes poses par Traefik.
       # Ne pas utiliser ORIGIN=${SERVICE_FQDN_WEB} : Coolify fournit le domaine sans schema et Node le refuse.

@@ -158,7 +158,10 @@ export async function upload(files: File[]): Promise<UploadItem[]> {
 	const fd = new FormData();
 	for (const f of files) fd.append('files', f, f.name);
 	const r = await fetch(API + '/api/upload', { method: 'POST', body: fd });
-	if (!r.ok) throw new Error(`${r.status} ${r.statusText} sur /api/upload`);
+	if (!r.ok) {
+		const detail = await r.json().then((j) => j.detail ?? j.message).catch(() => '');
+		throw new Error(`${r.status} sur /api/upload${detail ? ' : ' + detail : ''}`);
+	}
 	return ((await r.json()) as { items: UploadItem[] }).items;
 }
 
