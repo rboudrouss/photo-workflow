@@ -49,6 +49,19 @@ app.add_middleware(
 app.include_router(workers_router)
 
 
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.exception_handlers import request_validation_exception_handler  # noqa: E402
+import logging as _logging  # noqa: E402
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation(request, exc: RequestValidationError):
+    """Un 422 sans contexte est indebogable a distance : on journalise le chemin et les champs fautifs (pas le corps)."""
+    fields = [(".".join(str(x) for x in e.get("loc", [])), e.get("msg")) for e in exc.errors()]
+    _logging.getLogger("photoflow.api").warning("422 %s %s : %s", request.method, request.url.path, fields)
+    return await request_validation_exception_handler(request, exc)
+
+
 # --------------------------------------------------------------------------- helpers
 
 def _media(photo_id: uuid.UUID) -> dict:

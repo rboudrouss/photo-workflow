@@ -33,6 +33,37 @@ def open_image(path: Path) -> Image.Image:
     return img
 
 
+_ORIENT_SWAP = {5, 6, 7, 8}  # orientations EXIF qui echangent largeur et hauteur
+
+
+def open_for_ingest(path: Path, max_side: int) -> tuple[Image.Image, int, int, str | None, dict]:
+    """Ouvre un scan pour l'ingestion SANS le decoder en pleine resolution.
+
+    Un scan de 40 Mpx decode en entier = 120 Mo de RGB, et on en fait plusieurs copies : de quoi faire tuer un
+    petit conteneur. Pour un JPEG, `draft` demande a libjpeg de decoder directement a 1/2, 1/4 ou 1/8 de la
+    taille, juste au-dessus de `max_side` : quelques Mo au lieu de 120. Les dimensions renvoyees sont celles de
+    l'original (lues dans l'en-tete, orientation EXIF appliquee). L'image renvoyee sert aux derives et au pHash.
+    """
+    im = Image.open(path)
+    fmt = im.format
+    width, height = im.size
+    exif = {}
+    try:
+        exif = dict(im.getexif())
+    except Exception:
+        pass
+    if exif.get(0x0112) in _ORIENT_SWAP:
+        width, height = height, width
+    if fmt == "JPEG":
+        im.draft("RGB", (max_side, max_side))
+    im = ImageOps.exif_transpose(im)
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    if max(im.size) > max_side * 2:  # formats sans draft (TIFF, PNG) : on reduit aussitot, une seule copie
+        im.thumbnail((max_side * 2, max_side * 2), Image.Resampling.LANCZOS)
+    return im, width, height, fmt, exif
+
+
 def phash64(img: Image.Image) -> int:
     """pHash 64 bits, renvoye en bigint signe pour Postgres."""
     h = imagehash.phash(img, hash_size=8)
@@ -51,8 +82,10 @@ def derived_paths(photo_id: uuid.UUID) -> dict[str, Path]:
 def make_derived(img: Image.Image, photo_id: uuid.UUID) -> dict[str, Path]:
     paths = derived_paths(photo_id)
     paths["thumb"].parent.mkdir(parents=True, exist_ok=True)
-    for key, size in (("thumb", settings.thumb_size), ("web", settings.web_size)):
-        out = img.copy()
+    # Du plus grand au plus petit, chaque derive part du precedent : une seule copie de travail a la fois.
+    out = img
+    for key, size in (("web", settings.web_size), ("thumb", settings.thumb_size)):
+        out = out.copy() if out is img else out
         out.thumbnail((size, size), Image.Resampling.LANCZOS)
         out.save(paths[key], "JPEG", quality=88, optimize=True)
     return paths

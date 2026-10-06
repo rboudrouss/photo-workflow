@@ -46,8 +46,8 @@ def _owned_job(session: Session, w: Worker, job_id: uuid.UUID) -> Job:
 
 class PairIn(BaseModel):
     code: str = Field(min_length=20, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-    hostname: str | None = Field(default=None, max_length=100)
-    extractors: list[str] = Field(default_factory=list, max_length=10)
+    hostname: str | None = Field(default=None, max_length=200)  # tronque a 100 a l'enregistrement
+    extractors: list[str] = Field(default_factory=list, max_length=20)
 
 
 @router.post("/api/worker/pair")

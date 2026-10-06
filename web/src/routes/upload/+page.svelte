@@ -31,17 +31,33 @@
 		results = [];
 		done = 0;
 		const files = queue;
+		// Un lot qui echoue (serveur qui redemarre, coupure reseau) est retente 3 fois avec attente croissante,
+		// puis ses fichiers sont marques en erreur et on passe au lot suivant : un envoi de 1000 photos ne
+		// s'arrete pas sur un incident. Les fichiers en erreur restent dans la file pour un second essai.
+		const failed: File[] = [];
 		try {
 			for (let i = 0; i < files.length; i += BATCH) {
-				const items = await upload(files.slice(i, i + BATCH));
+				const batch = files.slice(i, i + BATCH);
+				let items: UploadItem[] | null = null;
+				let lastError = '';
+				for (let attempt = 0; attempt < 4 && !items; attempt++) {
+					if (attempt) await new Promise((r) => setTimeout(r, 3000 * attempt));
+					try {
+						items = await upload(batch);
+					} catch (e: any) {
+						lastError = e.message;
+					}
+				}
+				if (!items) {
+					failed.push(...batch);
+					items = batch.map((f) => ({ filename: f.name, status: 'error' as const, error: lastError }));
+				}
 				results = [...results, ...items];
 				done = Math.min(i + BATCH, files.length);
 			}
-			queue = [];
-		} catch (e: any) {
-			error = e.message + ' (les fichiers restants ne sont pas envoyes)';
-			queue = files.slice(done);
 		} finally {
+			queue = failed;
+			if (failed.length) error = `${failed.length} fichier(s) non envoyes apres plusieurs essais : ils restent dans la liste, clique a nouveau sur Envoyer.`;
 			sending = false;
 		}
 	}

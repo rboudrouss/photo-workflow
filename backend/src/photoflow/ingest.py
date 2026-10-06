@@ -53,17 +53,17 @@ def ingest_file(session, path: Path, rel_path: str, extractors: list[str] | None
     existing = session.scalar(select(Photo.id).where(Photo.sha256 == digest))
     if existing is not None:
         raise Duplicate(existing)
-    img = images.open_image(path)
+    img, width, height, fmt, exif = images.open_for_ingest(path, settings.web_size)
     photo = Photo(
         sha256=digest,
         rel_path=rel_path,
         filename=unicodedata.normalize("NFC", filename or path.name),  # macOS scanne en NFD
-        width=img.width,
-        height=img.height,
+        width=width,
+        height=height,
         bytes=path.stat().st_size,
-        format=(Image.open(path).format or "").upper() or None,
+        format=(fmt or "").upper() or None,
         phash=images.phash64(img),
-        exif=_exif_dict(img),
+        exif={str(k): v for k, v in exif.items() if isinstance(v, (int, float, str))} or None,
         status="ready",
     )
     session.add(photo)
