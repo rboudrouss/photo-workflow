@@ -37,14 +37,23 @@ def analyze(img: Image.Image) -> dict[str, Any]:
     gray = np.asarray(small.convert("L")).astype(np.float32)
     hsv = np.asarray(small.convert("HSV")).astype(np.float32)
 
-    # Tonalite : saturation moyenne des tons moyens (on ignore les zones tres sombres/claires).
+    # Tonalite. Un tirage noir et blanc scanne en couleur a presque toujours une dominante (jaunissement,
+    # virage sepia) : la saturation ne suffit pas a le distinguer d'une vraie image couleur. Ce qui les
+    # separe, c'est la dispersion des teintes : une dominante = une seule teinte, une image couleur = plusieurs.
     mid = (gray > 40) & (gray < 215)
     sat = float(hsv[..., 1][mid].mean() / 255) if mid.any() else 0.0
-    hue = float(hsv[..., 0][mid].mean() / 255 * 360) if mid.any() else 0.0
-    if sat < 0.07:
+    h = hsv[..., 0][mid & (hsv[..., 1] > 25)] / 255 * 2 * np.pi  # teinte des pixels un peu satures
+    if h.size > 50:
+        c, s_ = np.cos(h).mean(), np.sin(h).mean()
+        hue = float(np.degrees(np.arctan2(s_, c)) % 360)
+        hue_std = float(np.degrees(np.sqrt(-2 * np.log(max(np.hypot(c, s_), 1e-6)))))  # ecart-type circulaire
+    else:
+        hue, hue_std = 0.0, 0.0
+    colored_frac = h.size / max(int(mid.sum()), 1)  # part des tons moyens qui portent une teinte
+    if sat < 0.07 or colored_frac < 0.05:
         tonality = "neutre"
-    elif sat < 0.35 and 15 <= hue <= 55:
-        tonality = "sepia"
+    elif hue_std < 25:
+        tonality = "sepia" if 15 <= hue <= 95 else "monochrome_teinte"
     else:
         tonality = "couleur"
 
@@ -61,6 +70,8 @@ def analyze(img: Image.Image) -> dict[str, Any]:
         "tonality": tonality,
         "saturation": round(sat, 3),
         "hue": round(hue, 1),
+        "hue_std": round(hue_std, 1),
+        "colored_frac": round(colored_frac, 3),
         "luminance": round(float(gray.mean()), 1),
         "contrast": round(float(gray.std()), 1),
         "sharpness": round(float(lap.var()), 1),

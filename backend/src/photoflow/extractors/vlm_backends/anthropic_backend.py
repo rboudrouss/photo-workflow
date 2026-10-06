@@ -49,7 +49,7 @@ def message_params(jpeg: bytes, model: str | None = None) -> dict[str, Any]:
         ],
         "output_config": {
             "effort": settings.anthropic_effort,
-            "format": {"type": "json_schema", "schema": json_schema()},
+            "format": {"type": "json_schema", "schema": json_schema(strip_lengths=True)},
         },
     }
 

@@ -40,7 +40,7 @@ Calculé sans modèle sur le dérivé web. Quasi constant au sein d'une pellicul
 | Champ | Comment | Usage |
 |---|---|---|
 | `ratio`, `orientation` | grand côté / petit côté ; paysage, portrait, carré | compatibilité de format entre photos d'une série |
-| `tonality` | saturation et teinte des tons moyens : `neutre` (N&B), `sepia`, `couleur` | série, époque (le sépia et le virage chaud sont plus anciens) |
+| `tonality` | `neutre` (saturation < 0,07 ou presque aucun pixel teinté), `sepia` (une seule teinte dominante entre 15° et 95°, écart-type circulaire des teintes < 25°), `monochrome_teinte` (une seule teinte, autre), `couleur` (plusieurs teintes). Un tirage N&B scanné en couleur est presque toujours jauni, donc la saturation seule ne suffit pas : c'est la dispersion des teintes (`hue_std`) qui sépare le monochrome teinté de la vraie couleur | série, époque (le sépia et le virage chaud sont plus anciens) ; sur l'échantillon réel : 77 sépia, 23 couleur, 10 neutre, 4 monochrome teinté |
 | `margins`, `has_border` | largeur de marge claire sur chaque bord, en fraction du côté | marges blanches = tirage amateur d'une certaine époque ; série |
 | `luminance`, `contrast`, `sharpness` | statistiques simples | qualité, tri, futur signal d'état |
 

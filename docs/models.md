@@ -34,6 +34,13 @@ Pros et cons de la famille Qwen3-VL : excellente lecture de texte, bon français
 poids ouverts. Contre : tendance à surinterpréter le lieu quand on le pousse (le prompt demande explicitement
 de laisser `null`), et datation moins fine qu'un modèle cloud.
 
+Mesuré sur la machine de dev (CPU 16 cœurs, 4B Q4_K_M, image 896 px) : 40 s d'encodage image, puis 5 tokens
+par seconde en génération pour 600 à 900 tokens de JSON, soit 3 à 4 minutes par scan. Le petit modèle part
+parfois en boucle à l'intérieur d'une chaîne (légende de pièce répétée) jusqu'à `max_tokens` : le schéma borne
+donc chaque chaîne et chaque liste (`maxLength`, `maxItems`, appliqués par la grammaire llama.cpp, retirés pour
+Claude), avec une pénalité de répétition, et une sortie tronquée est une erreur explicite plutôt qu'un JSON
+invalide retenté trois fois. La grammaire coûte environ 15 % de vitesse.
+
 Alternatives à considérer si Qwen déçoit sur un point précis : Gemma 3 27B (bon français, moins bon en OCR),
 InternVL3, Mistral Small 3.x vision. Tous passent par la même interface OpenAI-compatible, donc sans code.
 

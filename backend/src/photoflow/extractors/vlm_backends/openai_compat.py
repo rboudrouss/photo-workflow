@@ -64,6 +64,9 @@ class OpenAICompatBackend(VLMBackend):
             "model": self.model_name,
             "temperature": 0.2,
             "max_tokens": 2048,
+            # Les petits modeles bouclent parfois dans une chaine (legende repetee) : on penalise la repetition.
+            "repeat_penalty": 1.15,
+            "presence_penalty": 0.3,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
@@ -89,5 +92,7 @@ class OpenAICompatBackend(VLMBackend):
                     raise
                 log.warning("serveur VLM indisponible (%s), nouvel essai dans 30 s", e)
                 time.sleep(30)
-        content = r.json()["choices"][0]["message"]["content"]
-        return PhotoAnalysis.model_validate(json.loads(content))
+        choice = r.json()["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError("sortie tronquee par max_tokens (le modele a boucle) ; voir repeat_penalty et maxLength")
+        return PhotoAnalysis.model_validate(json.loads(choice["message"]["content"]))
