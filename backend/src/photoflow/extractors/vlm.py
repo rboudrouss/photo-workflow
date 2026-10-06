@@ -2,7 +2,7 @@
 
 Le schema `PhotoAnalysis` est LE contrat : il sert de JSON schema impose au modele
 (llama.cpp via response_format, Claude via output_config) et de validation au retour.
-Deux backends : OpenAI-compatible (llama.cpp, vLLM, MLX, Ollama) et Anthropic.
+Backends : OpenAI-compatible (llama.cpp, vLLM, MLX, Ollama), Anthropic (cle API) et Claude Code (abonnement).
 """
 
 from __future__ import annotations
@@ -281,7 +281,20 @@ def get_backend(name: str | None = None) -> VLMBackend:
         from .vlm_backends.anthropic_backend import AnthropicBackend
 
         return AnthropicBackend()
-    raise KeyError(f"backend VLM inconnu: {name} (llama | anthropic)")
+    if name == "claude-code":
+        from .vlm_backends.claude_code import ClaudeCodeBackend
+
+        return ClaudeCodeBackend()
+    if name == "claude":
+        # Cle API Console si presente (sorties structurees natives), sinon abonnement via CLAUDE_CODE_OAUTH_TOKEN.
+        import os
+
+        if settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"):
+            return get_backend("anthropic")
+        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            return get_backend("claude-code")
+        raise RuntimeError("VLM_BACKEND=claude : definir ANTHROPIC_API_KEY ou CLAUDE_CODE_OAUTH_TOKEN")
+    raise KeyError(f"backend VLM inconnu: {name} (llama | anthropic | claude-code | claude)")
 
 
 # --------------------------------------------------------------------------- extracteur

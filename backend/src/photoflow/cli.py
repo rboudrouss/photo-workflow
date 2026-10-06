@@ -200,7 +200,7 @@ def series_build(
 
 @vlm_app.command("run")
 def vlm_run(
-    backend: str = typer.Option(settings.vlm_backend, help="llama | anthropic"),
+    backend: str = typer.Option(settings.vlm_backend, help="llama | anthropic | claude-code | claude"),
     limit: int = typer.Option(10),
     model: Optional[str] = typer.Option(None, help="Nom du modele (anthropic) ; ignore pour llama."),
     only_missing: bool = typer.Option(True, help="Ignorer les photos deja analysees par cette source."),

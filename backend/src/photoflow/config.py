@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     # Device pour torch / onnxruntime : cpu, cuda, mps.
     device: str = "cpu"
 
-    # VLM : "llama" (serveur OpenAI-compatible, llama.cpp / vLLM / MLX) ou "anthropic".
+    # VLM : "llama" (serveur OpenAI-compatible, llama.cpp / vLLM / MLX), "anthropic" (cle API), "claude-code"
+    # (abonnement, CLAUDE_CODE_OAUTH_TOKEN) ou "claude" (cle API si presente, sinon abonnement).
     vlm_backend: str = "llama"
     vlm_max_side: int = 1024
     vlm_timeout: float = 600.0

@@ -2,6 +2,7 @@
 #
 #   docker compose -f docker-compose.worker.yml up -d --build                 # visages, embeddings, nudite, physique
 #   docker compose -f docker-compose.worker.yml --profile vlm up -d --build   # + VLM local (llama.cpp)
+#   docker compose -f docker-compose.worker.yml --profile claude up -d --build   # + VLM Claude (cle API ou abonnement)
 #
 # Puis ouvrir la page « Workers » du site : la machine apparait « en attente », cliquer « Approuver ».
 # Le worker n'ouvre aucun port et n'a pas acces a la base : il ne fait que des requetes sortantes vers le
@@ -9,7 +10,7 @@
 # dans le volume photoflow-worker-data.
 #
 # Facultatif, dans un .env a cote : SERVER_URL (autre serveur), WORKER_NAME (nom propose), WORKER_EXTRACTORS,
-# LLM_HF_REPO / LLM_THREADS / VLM_RANK (VLM), DEVICE=cuda (+ decommenter les blocs deploy, voir docs/models.md).
+# LLM_HF_REPO / LLM_THREADS / VLM_RANK (VLM), ANTHROPIC_API_KEY ou CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_MODEL (Claude), DEVICE=cuda (+ decommenter les blocs deploy, voir docs/models.md).
 
 name: photoflow-worker
 
@@ -41,6 +42,26 @@ services:
     profiles: [vlm]
     command: photoflow worker --extractors vlm
     depends_on: [llm]
+
+  # VLM Claude : pas de modele local, chaque photo est envoyee a Claude. ANTHROPIC_API_KEY (cle Console, facturee a
+  # l'usage) si presente, sinon CLAUDE_CODE_OAUTH_TOKEN (abonnement, `claude setup-token`, passe par le CLI Claude Code).
+  worker-claude:
+    <<: *worker
+    build:
+      context: ./backend
+      args: { ML: "0", CLAUDE_CLI: "1" }   # ni torch ni modeles : juste le client et le CLI
+    profiles: [claude]
+    command: photoflow worker --extractors vlm
+    environment:
+      SERVER_URL: ${SERVER_URL:-https://photoflow.rboud.com}
+      WORKER_NAME: ${WORKER_NAME:-}
+      DATA_DIR: /data
+      VLM_BACKEND: claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-low}
+      VLM_MAX_SIDE: ${VLM_MAX_SIDE:-1024}
 
   llm:
     profiles: [vlm]
