@@ -17,7 +17,7 @@ import anthropic
 
 from ...config import settings
 from ...images import to_base64
-from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema
+from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema, parse_output
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def parse_response(message: Any) -> PhotoAnalysis:
     text = next((b.text for b in message.content if b.type == "text"), None)
     if text is None:
         raise RuntimeError(f"pas de bloc texte dans la reponse (stop_reason={message.stop_reason})")
-    return PhotoAnalysis.model_validate(json.loads(text))
+    return parse_output(json.loads(text))
 
 
 class AnthropicBackend(VLMBackend):

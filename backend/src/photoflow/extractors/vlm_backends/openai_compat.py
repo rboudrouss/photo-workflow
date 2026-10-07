@@ -14,7 +14,7 @@ import httpx
 
 from ...config import settings
 from ...images import to_base64
-from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema
+from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema, parse_output
 
 log = logging.getLogger(__name__)
 
@@ -95,4 +95,4 @@ class OpenAICompatBackend(VLMBackend):
         choice = r.json()["choices"][0]
         if choice.get("finish_reason") == "length":
             raise RuntimeError("sortie tronquee par max_tokens (le modele a boucle) ; voir repeat_penalty et maxLength")
-        return PhotoAnalysis.model_validate(json.loads(choice["message"]["content"]))
+        return parse_output(json.loads(choice["message"]["content"]))

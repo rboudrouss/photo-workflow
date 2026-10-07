@@ -16,7 +16,7 @@ import tempfile
 
 from ...config import settings
 from ...images import to_base64
-from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema
+from ..vlm import SYSTEM_PROMPT, USER_PROMPT, PhotoAnalysis, VLMBackend, json_schema, parse_output
 
 log = logging.getLogger(__name__)
 
@@ -73,4 +73,4 @@ class ClaudeCodeBackend(VLMBackend):
         if result.get("is_error") or result.get("structured_output") is None:
             raise RuntimeError(f"claude -p: {str(result.get('result'))[:300]}")
         log.info("claude-code %s: cout=%s", self.model_name, result.get("total_cost_usd"))
-        return PhotoAnalysis.model_validate(result["structured_output"])
+        return parse_output(result["structured_output"])

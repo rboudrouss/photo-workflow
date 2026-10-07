@@ -8,6 +8,7 @@ Backends : OpenAI-compatible (llama.cpp, vLLM, MLX, Ollama), Anthropic (cle API)
 from __future__ import annotations
 
 import logging
+import re
 from enum import Enum
 from typing import Any
 
@@ -92,11 +93,25 @@ class Confiance(str, Enum):
     forte = "forte"
 
 
+_DECENNIE = re.compile(r"(1[0-9]{2}|20[0-2])[0-9]")
+
+
 class Epoque(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decennie: str = Field(pattern=r"^(1[89][0-9]0s|20[0-2]0s|inconnue)$", description="Decennie estimee, UNE seule, format strict '1930s' (chiffres + s). 'inconnue' si impossible. Jamais d'intervalle.")
+    # 1000s a 2020s : les pieces de monnaie remontent bien avant la photographie (1760s, 1790s...).
+    decennie: str = Field(pattern=r"^(1[0-9]{2}0s|20[0-2]0s|inconnue)$", description="Decennie estimee, UNE seule, format strict '1930s' (chiffres + s). Pour une piece, decennie de frappe, meme avant 1800. 'inconnue' si impossible. Jamais d'intervalle.")
     confiance: Confiance
     indices: list[Str200] = Field(max_length=8, description="Indices visuels utilises : vetements, vehicules, support, bords, format.")
+
+    @field_validator("decennie", mode="before")
+    @classmethod
+    def _une_decennie(cls, v: Any) -> Any:
+        """Sans grammaire (Claude), le format n'est pas garanti : '1920s-1930s' ou '1925' deviennent '1920s',
+        ce qui est hors de 1000-2029 devient 'inconnue'."""
+        if not isinstance(v, str) or v == "inconnue" or re.fullmatch(r"(1[0-9]{2}0s|20[0-2]0s)", v):
+            return v
+        m = _DECENNIE.search(v)
+        return f"{m.group(0)[:3]}0s" if m else "inconnue"
 
 
 class Lieu(BaseModel):
@@ -287,6 +302,39 @@ Regles :
 - Reponds uniquement avec le JSON demande."""
 
 USER_PROMPT = "Analyse cette photo et remplis tous les champs du schema."
+
+
+def fit_to_schema(data: Any) -> Any:
+    """Tronque listes et textes aux bornes du schema. Les sorties structurees Claude ne portent pas maxItems ni
+    maxLength (json_schema(strip_lengths=True)) : un 31e texte lu sur une carte ne doit pas faire perdre l'analyse."""
+    schema = PhotoAnalysis.model_json_schema()
+    defs = schema.get("$defs", {})
+
+    def walk(v: Any, node: dict) -> Any:
+        if "$ref" in node:
+            node = defs[node["$ref"].rsplit("/", 1)[-1]]
+        if "anyOf" in node:
+            alts = [a for a in node["anyOf"] if a.get("type") != "null"]
+            node = alts[0] if alts and v is not None else node
+            if "$ref" in node:
+                node = defs[node["$ref"].rsplit("/", 1)[-1]]
+        if isinstance(v, dict):
+            props = node.get("properties", {})
+            return {k: walk(x, props[k]) if k in props else x for k, x in v.items()}
+        if isinstance(v, list):
+            if node.get("maxItems") is not None:
+                v = v[: node["maxItems"]]
+            return [walk(x, node.get("items", {})) for x in v]
+        if isinstance(v, str) and node.get("maxLength") is not None:
+            return v[: node["maxLength"]]
+        return v
+
+    return walk(data, schema)
+
+
+def parse_output(data: Any) -> PhotoAnalysis:
+    """Valide la sortie d'un modele, apres l'avoir ramenee dans les bornes du schema."""
+    return PhotoAnalysis.model_validate(fit_to_schema(data))
 
 
 def json_schema(strip_lengths: bool = False) -> dict:
