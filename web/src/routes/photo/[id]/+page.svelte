@@ -2,7 +2,7 @@
 	import { blur } from '$lib/blur.svelte';
 	import { selection, toggleSelected } from '$lib/selection.svelte';
 	import { page } from '$app/state';
-	import { api, media, NUDITY_LEVELS, isExplicit, type PhotoDetail } from '$lib/api';
+	import { api, media, NUDITY_LEVELS, DELCAMPE_STATUSES, isExplicit, type DelcampeStatus, type PhotoDetail } from '$lib/api';
 
 	let photo = $state<PhotoDetail | null>(null);
 	let error = $state('');
@@ -39,6 +39,13 @@
 		load();
 	}
 
+	async function setStatus(e: Event) {
+		if (!photo) return;
+		const v = (e.target as HTMLSelectElement).value;
+		await api.setDelcampeStatus([photo.id], (v || null) as DelcampeStatus | null);
+		load();
+	}
+
 	async function copyFiche() {
 		if (!photo) return;
 		const f = await api.fiche(photo.id);
@@ -72,6 +79,14 @@
 					{#each NUDITY_LEVELS as l}<option value={l}>{l}</option>{/each}
 				</select>
 				<span>source : {photo.nudity_source ?? 'aucune'}</span>
+			</p>
+			<p class="muted">
+				Delcampe :
+				<select value={photo.delcampe_status ?? ''} onchange={setStatus}>
+					<option value="">pas de statut</option>
+					{#each Object.entries(DELCAMPE_STATUSES) as [k, label]}<option value={k}>{label}</option>{/each}
+				</select>
+				{#if photo.delcampe_status_at}<span>depuis le {new Date(photo.delcampe_status_at).toLocaleDateString('fr-FR')}</span>{/if}
 			</p>
 			{#if photo.faces.length}
 				<h3>Visages ({photo.faces.length})</h3>

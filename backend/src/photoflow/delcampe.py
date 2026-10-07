@@ -214,6 +214,74 @@ def category_for(data: dict, nudity_level: str | None) -> tuple[int | None, str]
     return PHOTO_CATEGORIES[slug or "autre"], "scene"
 
 
+# --------------------------------------------------------------------------- statut de publication
+
+# validee  : fiche relue, prete a partir
+# exportee : dans un fichier Easy Uploader (pose a l'export), pas encore confirmee en ligne
+# en_vente : en ligne sur Delcampe
+# vendue
+# retiree  : retiree de la vente ou invendue, peut repartir
+STATUSES = ("validee", "exportee", "en_vente", "vendue", "retiree")
+# Jamais deux fois en vente : l'export refuse ces photos.
+BLOCKING = ("en_vente", "vendue")
+# Encore a publier (filtre « a publier » de la grille).
+TO_PUBLISH_SQL = "coalesce(p.delcampe_status, '') NOT IN ('exportee', 'en_vente', 'vendue')"
+
+
+def set_status(session: Session, photo_ids: list[uuid.UUID], status: str | None, only_from: tuple[str | None, ...] | None = None) -> int:
+    """Change le statut (None l'efface). only_from : ne touche que les photos dans l'un de ces statuts."""
+    if status is not None and status not in STATUSES:
+        raise ValueError(f"statut inconnu : {status}")
+    cond = ""
+    if only_from is not None:
+        known = [s for s in only_from if s is not None]
+        cond = " AND (delcampe_status = ANY(:from)" + (" OR delcampe_status IS NULL)" if None in only_from else ")")
+    at = "NULL" if status is None else "now()"
+    params: dict = {"s": status, "ids": photo_ids}
+    if only_from is not None:
+        params["from"] = known
+    r = session.execute(
+        text(f"UPDATE photos SET delcampe_status = :s, delcampe_status_at = {at} WHERE id = ANY(:ids){cond}"), params
+    )
+    return r.rowcount
+
+
+_REF_IN_FILE = re.compile(r"\bpf-([0-9a-f]{12})\b", re.I)
+
+
+def refs_in_file(data: bytes, filename: str) -> set[str]:
+    """References perso (pf-...) trouvees n'importe ou dans un fichier exporte de Delcampe (Excel ou CSV) :
+    on ne depend pas du nom ni de l'ordre des colonnes de leurs exports."""
+    if filename.lower().endswith((".xlsx", ".xlsm")):
+        from openpyxl import load_workbook
+
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        content = "\n".join(
+            str(v) for ws in wb.worksheets for row in ws.iter_rows(values_only=True) for v in row if v is not None
+        )
+    else:
+        try:
+            content = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            content = data.decode("latin-1")
+    return {m.lower() for m in _REF_IN_FILE.findall(content)}
+
+
+def photos_for_refs(session: Session, refs: set[str]) -> dict[str, uuid.UUID]:
+    """Reference (12 caracteres hexa) -> photo. Une reference ambigue (deux photos, improbable) est ignoree."""
+    if not refs:
+        return {}
+    rows = session.execute(
+        text("SELECT left(replace(id::text, '-', ''), 12) AS ref, id FROM photos "
+             "WHERE left(replace(id::text, '-', ''), 12) = ANY(:refs)"),
+        {"refs": list(refs)},
+    ).all()
+    found: dict[str, list[uuid.UUID]] = {}
+    for r in rows:
+        found.setdefault(r.ref, []).append(r.id)
+    return {ref: ids[0] for ref, ids in found.items() if len(ids) == 1}
+
+
 # --------------------------------------------------------------------------- liens publics
 
 def ensure_public_tokens(session: Session, photos: list[Photo]) -> None:
@@ -305,6 +373,8 @@ def preview_row(session: Session, photo: Photo, base_url: str | None = None) -> 
         warnings.append("verso")
     if (data.get("nombre_objets") or 1) > 1:
         warnings.append(f"lot de {data['nombre_objets']} objets")
+    if photo.delcampe_status == "exportee":
+        warnings.append(f"deja exportee le {photo.delcampe_status_at:%d/%m/%Y} : verifier qu'elle n'est pas en ligne")
     return {
         "id": str(photo.id),
         "filename": photo.filename,
@@ -317,6 +387,9 @@ def preview_row(session: Session, photo: Photo, base_url: str | None = None) -> 
         "nudity_level": photo.nudity_level,
         "potentiel": data.get("potentiel"),
         "public_url": public_url(base_url, photo.public_token) if base_url and photo.public_token else None,
+        "status": photo.delcampe_status,
+        "status_at": photo.delcampe_status_at.isoformat() if photo.delcampe_status_at else None,
+        "blocked": photo.delcampe_status in BLOCKING,
         "warnings": warnings,
     }
 

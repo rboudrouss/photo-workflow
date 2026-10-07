@@ -58,6 +58,10 @@ EXTRA_SQL = [
     # Liens publics des images (export Delcampe).
     "ALTER TABLE photos ADD COLUMN IF NOT EXISTS public_token TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS photos_public_token_uq ON photos (public_token)",
+    # Statut de publication Delcampe.
+    "ALTER TABLE photos ADD COLUMN IF NOT EXISTS delcampe_status VARCHAR(16)",
+    "ALTER TABLE photos ADD COLUMN IF NOT EXISTS delcampe_status_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS photos_delcampe_status_idx ON photos (delcampe_status)",
 ]
 
 

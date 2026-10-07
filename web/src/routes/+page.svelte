@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { navigating } from '$app/state';
-	import { api, media, isExplicit, PAGE_SIZE, type Facets } from '$lib/api';
+	import { api, media, isExplicit, PAGE_SIZE, DELCAMPE_STATUSES, type Facets } from '$lib/api';
 	import { blur } from '$lib/blur.svelte';
 	import { selection, setSelected, clearSelection } from '$lib/selection.svelte';
 	import TagFilter from '$lib/TagFilter.svelte';
@@ -18,22 +18,24 @@
 	let nudity = $state<'all' | 'exclude' | 'only'>('all');
 	let typeObjet = $state('');
 	let vlm = $state('');
+	let statut = $state('');
 	let tags = $state<string[]>([]);
 	let sort = $state<'recent' | 'vente' | 'instagram'>('recent');
 	$effect.pre(() => {
-		({ q, mode, scene, decade, nudity, vlm, sort } = data.params);
+		({ q, mode, scene, decade, nudity, vlm, sort, statut } = data.params);
 		typeObjet = data.params.type_objet;
 		tags = data.params.tag;
 	});
 
 	let vectorSearch = $state(true);
-	let facets = $state<Facets>({ types: [], scenes: [], decades: [], vlm: [] });
+	let facets = $state<Facets>({ statuts: [], types: [], scenes: [], decades: [], vlm: [] });
+	const facetCount = (k: string) => facets.statuts.find((f) => f.value === k)?.count ?? 0;
 	// Un tag porte par toutes les photos affichees ne filtrerait rien : on ne le propose pas.
 	let refine = $derived(data.refine.filter((t) => data.total === null || t.count < data.total));
 	let loading = $derived(navigating.to?.url.pathname === '/');
 
 	function go(page: number) {
-		const params: Record<string, string> = { q, mode, scene, decade, nudity, type_objet: typeObjet, vlm, sort, page: String(page) };
+		const params: Record<string, string> = { q, mode, scene, decade, nudity, type_objet: typeObjet, vlm, statut, sort, page: String(page) };
 		const defaults: Record<string, string> = { mode: 'text', nudity: 'all', sort: 'recent', page: '1' };
 		const u = new URLSearchParams();
 		for (const [k, v] of Object.entries(params)) if (v && v !== defaults[k]) u.set(k, v);
@@ -111,6 +113,12 @@
 		<option value="none">jamais decrites</option>
 		{#each facets.vlm as f}<option value={f.value}>par {f.value.replace(/^vlm:/, '')} ({f.count})</option>{/each}
 	</select>
+	<select bind:value={statut} onchange={search} class="narrow">
+		<option value="">delcampe : tout</option>
+		<option value="a_publier">a publier</option>
+		<option value="aucun">sans statut ({facetCount('aucun')})</option>
+		{#each Object.entries(DELCAMPE_STATUSES) as [k, label]}<option value={k}>{label} ({facetCount(k)})</option>{/each}
+	</select>
 	<select bind:value={sort} onchange={search} title="Tri (hors recherche semantique, triee par proximite)">
 		<option value="recent">tri : decrites, recentes</option>
 		<option value="vente">tri : potentiel de vente</option>
@@ -142,6 +150,7 @@
 						<b class:hi={p.potentiel.vente >= 7}>V{p.potentiel.vente}</b><b class:hi={p.potentiel.instagram >= 7}>I{p.potentiel.instagram}</b>
 					</span>
 				{/if}
+				{#if p.delcampe_status}<span class="st st-{p.delcampe_status}">{DELCAMPE_STATUSES[p.delcampe_status]}</span>{/if}
 				<div class="t" title={p.title ?? p.filename}>
 					{p.title ?? p.filename}
 					{#if p.score != null}<span class="muted"> {p.score.toFixed(2)}</span>{/if}
@@ -244,6 +253,28 @@
 	}
 	.cell :global(.card) {
 		position: relative;
+	}
+	.st {
+		position: absolute;
+		left: 0.3rem;
+		bottom: 2.1rem;
+		font-size: 0.7rem;
+		padding: 0.05rem 0.35rem;
+		border-radius: 3px;
+		background: #000b;
+		color: #ddd;
+	}
+	.st-exportee {
+		background: #5a4a1a;
+		color: #fe9;
+	}
+	.st-en_vente {
+		background: #1d4f7a;
+		color: #fff;
+	}
+	.st-vendue {
+		background: #2d6a3e;
+		color: #fff;
 	}
 	.selbar {
 		position: sticky;

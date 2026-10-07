@@ -30,6 +30,7 @@ export interface Facet {
 }
 
 export interface Facets {
+	statuts: Facet[];
 	types: Facet[];
 	scenes: Facet[];
 	decades: Facet[];
@@ -46,8 +47,19 @@ export interface PhotoSummary {
 	distance?: number;
 	nudity_level?: string | null;
 	potentiel?: { vente: number; instagram: number } | null;
+	delcampe_status?: DelcampeStatus | null;
 	media: Media;
 }
+
+/** Statut de publication Delcampe (delcampe.STATUSES cote API), dans l'ordre du parcours. */
+export const DELCAMPE_STATUSES = {
+	validee: 'validée',
+	exportee: 'exportée',
+	en_vente: 'en vente',
+	vendue: 'vendue',
+	retiree: 'retirée'
+} as const;
+export type DelcampeStatus = keyof typeof DELCAMPE_STATUSES;
 
 export const NUDITY_LEVELS = ['aucune', 'suggestive', 'partielle', 'integrale'] as const;
 export function isExplicit(level?: string | null): boolean {
@@ -78,6 +90,7 @@ export interface FaceOut {
 export interface PhotoDetail extends PhotoSummary {
 	rel_path: string;
 	nudity_source: string | null;
+	delcampe_status_at: string | null;
 	format: string | null;
 	bytes: number;
 	ingested_at: string;
@@ -200,6 +213,9 @@ export interface ExportRow {
 	nudity_level: string | null;
 	potentiel: { vente: number; vente_raison: string; instagram: number; instagram_raison: string } | null;
 	public_url: string | null;
+	status: DelcampeStatus | null;
+	status_at: string | null;
+	blocked: boolean;
 	warnings: string[];
 	media: Media;
 }
@@ -238,6 +254,19 @@ export async function exportDelcampe(body: ExportRequest): Promise<Blob> {
 		throw new Error(typeof d === 'string' ? d : d?.message ? `${d.message} (${d.ids?.length ?? 0} photo(s))` : `${r.status} sur l'export`);
 	}
 	return r.blob();
+}
+
+/** Statuts d'apres un fichier exporte de Delcampe (references pf-... trouvees dans le fichier). */
+export async function delcampeSync(file: File, status: 'en_vente' | 'vendue' | 'retiree') {
+	const fd = new FormData();
+	fd.append('file', file, file.name);
+	fd.append('status', status);
+	const r = await fetch(API + '/api/delcampe/sync', { method: 'POST', body: fd });
+	if (!r.ok) {
+		const detail = await r.json().then((j) => j.detail).catch(() => '');
+		throw new Error(`${r.status} sur la synchronisation${typeof detail === 'string' && detail ? ' : ' + detail : ''}`);
+	}
+	return (await r.json()) as { refs: number; matched: number; updated: number; unknown: string[] };
 }
 
 type QueryParams = Record<string, string | number | string[] | undefined>;
@@ -284,6 +313,8 @@ export const api = {
 	exportPreview: (ids: string[], base_url: string) =>
 		call<{ items: ExportRow[] }>('/api/export/delcampe/preview', { method: 'POST', body: JSON.stringify({ ids, base_url }) }),
 	publicLinks: () => call<{ count: number }>('/api/public-links'),
+	setDelcampeStatus: (ids: string[], status: DelcampeStatus | null) =>
+		call<{ updated: number }>('/api/photos/delcampe-status', { method: 'POST', body: JSON.stringify({ ids, status }) }),
 	revokePublicLinks: (ids: string[] | null) =>
 		call<{ revoked: number }>('/api/public-links/revoke', { method: 'POST', body: JSON.stringify({ ids }) }),
 	series: (page = 1) => call<{ items: SeriesSummary[]; total: number }>(`/api/series?page=${page}&page_size=40`),

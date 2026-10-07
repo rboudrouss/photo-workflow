@@ -15,6 +15,7 @@ export const load: PageLoad = async ({ url }) => {
 		nudity: (get('nudity') || 'all') as 'all' | 'exclude' | 'only',
 		type_objet: get('type_objet'),
 		vlm: get('vlm'),
+		statut: get('statut'),
 		tag: url.searchParams.getAll('tag'),
 		sort: (get('sort') || 'recent') as 'recent' | 'vente' | 'instagram',
 		page: Math.max(1, Number(get('page')) || 1)

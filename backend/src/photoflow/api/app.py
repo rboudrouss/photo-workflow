@@ -10,6 +10,7 @@ Routes principales :
   GET  /api/delcampe/categories    rubriques proposees a l'export
   POST /api/export/delcampe/preview, POST /api/export/delcampe   fichier Easy Uploader (xlsx ou csv)
   GET  /api/public-links, POST /api/public-links/revoke          liens publics des images
+  POST /api/photos/delcampe-status, POST /api/delcampe/sync       statut de publication Delcampe
   GET  /pub/{jeton}.jpg            image publique (sans mot de passe, pour Delcampe)
   POST /api/upload                 televerser des photos (multipart, champ files)
   GET  /api/series, /api/series/{id}, PUT /api/series/{id}, POST /api/series/{id}/propagate
@@ -31,7 +32,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
@@ -296,6 +297,8 @@ class PhotoFilters:
     nudity: Literal["all", "exclude", "only"] = "all"
     type_objet: str | None = None
     vlm: str | None = None  # "any" : decrite par un VLM, "none" : jamais, sinon une source precise (vlm:llama:...)
+    # Statut Delcampe : "a_publier" (ni exportee, ni en vente, ni vendue), "aucun", ou un statut precis.
+    statut: Literal["a_publier", "aucun", *delcampe.STATUSES] | None = None
     tag: list[str] = Query(default_factory=list, max_length=20)  # ?tag=a&tag=b : toutes requises
 
     def where(self, params: dict, text_query: bool = True) -> list[str]:
@@ -316,6 +319,13 @@ class PhotoFilters:
         elif self.vlm:
             where.append("EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND c.source = :vlm)")
             params["vlm"] = self.vlm
+        if self.statut == "a_publier":
+            where.append(delcampe.TO_PUBLISH_SQL)
+        elif self.statut == "aucun":
+            where.append("p.delcampe_status IS NULL")
+        elif self.statut:
+            where.append("p.delcampe_status = :statut")
+            params["statut"] = self.statut
         if self.nudity == "exclude":
             where.append("coalesce(p.nudity_level, 'aucune') = 'aucune'")
         elif self.nudity == "only":
@@ -391,6 +401,7 @@ def list_photos(
             "id": str(r["id"]), "filename": r["filename"], "width": r["width"], "height": r["height"],
             "title": r["title"], "score": r["score"], "nudity_level": r["nudity_level"], "media": _media(r["id"]),
             "potentiel": {"vente": r["vente"], "instagram": r["instagram"]} if r["vente"] is not None else None,
+            "delcampe_status": r["delcampe_status"],
         }
         for r in rows
     ]
@@ -460,6 +471,8 @@ def get_photo(photo_id: uuid.UUID, session: Session = Depends(get_session)):
         "rel_path": p.rel_path, "format": p.format, "bytes": p.bytes, "phash": p.phash,
         "ingested_at": p.ingested_at.isoformat(),
         "nudity_source": p.nudity_source,
+        "delcampe_status": p.delcampe_status,
+        "delcampe_status_at": p.delcampe_status_at.isoformat() if p.delcampe_status_at else None,
         "series": (
             {
                 "id": p.series_id,
@@ -580,12 +593,17 @@ class ExportIn(ExportPreviewIn):
 @app.post("/api/export/delcampe")
 def export_delcampe(body: ExportIn, session: Session = Depends(get_session)):
     """Fichier Easy Uploader. Cree les liens publics des images qui n'en ont pas encore (Delcampe les telecharge
-    a l'import) ; ils restent actifs jusqu'a revocation."""
+    a l'import) ; ils restent actifs jusqu'a revocation. Les photos passent en statut « exportee » ; celles deja en
+    vente ou vendues sont refusees (409)."""
     photos = _photos_in_order(session, body.ids)
+    blocked = [str(p.id) for p in photos if p.delcampe_status in delcampe.BLOCKING]
+    if blocked:
+        raise HTTPException(409, {"message": "deja en vente ou vendue", "ids": blocked})
     rows, missing = delcampe.build_rows(session, photos, body.options, body.overrides, body.base_url)
     if missing:
         session.rollback()
         raise HTTPException(422, {"message": "categorie manquante", "ids": missing})
+    delcampe.set_status(session, [p.id for p in photos], "exportee")
     session.commit()
     if body.format == "csv":
         content, media_type = delcampe.to_csv(rows), "text/csv; charset=utf-8"
@@ -593,6 +611,45 @@ def export_delcampe(body: ExportIn, session: Session = Depends(get_session)):
         content, media_type = delcampe.to_xlsx(rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return Response(content, media_type=media_type,
                     headers={"Content-Disposition": f"attachment; filename=delcampe.{body.format}"})
+
+
+class StatusIn(BaseModel):
+    ids: list[uuid.UUID] = Field(max_length=MAX_SELECTION)
+    status: Literal[*delcampe.STATUSES] | None  # None : effacer
+
+
+@app.post("/api/photos/delcampe-status")
+def set_delcampe_status(body: StatusIn, session: Session = Depends(get_session)):
+    n = delcampe.set_status(session, body.ids, body.status)
+    session.commit()
+    return {"updated": n, "status": body.status}
+
+
+MAX_SYNC_BYTES = 20 * 1024 * 1024
+
+
+@app.post("/api/delcampe/sync")
+async def delcampe_sync(
+    file: UploadFile = File(...),
+    status: Literal["en_vente", "vendue", "retiree"] = Form(...),
+    session: Session = Depends(get_session),
+):
+    """Met a jour les statuts d'apres un fichier exporte de Delcampe (ventes en cours, vendues, invendues) : toute
+    reference perso pf-... trouvee dans le fichier. « en vente » ne remplace pas « vendue »."""
+    data = await file.read()
+    if len(data) > MAX_SYNC_BYTES:
+        raise HTTPException(413, "fichier trop gros (20 Mo max)")
+    try:
+        refs = delcampe.refs_in_file(data, file.filename or "")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"fichier illisible : {e}"[:300]) from e
+    found = delcampe.photos_for_refs(session, refs)
+    ids = list(found.values())
+    only_from = (None, "validee", "exportee", "en_vente", "retiree") if status == "en_vente" else None
+    updated = delcampe.set_status(session, ids, status, only_from=only_from)
+    session.commit()
+    return {"refs": len(refs), "matched": len(ids), "updated": updated,
+            "unknown": sorted(r for r in refs if r not in found)[:50]}
 
 
 @app.get("/api/public-links")
@@ -628,7 +685,11 @@ def facets(session: Session = Depends(get_session)):
     vlm = session.execute(
         text("SELECT source AS k, count(DISTINCT photo_id) AS n FROM captions WHERE source LIKE 'vlm:%' GROUP BY 1 ORDER BY 2 DESC")
     ).all()
+    statuts = session.execute(
+        text("SELECT coalesce(delcampe_status, 'aucun') AS k, count(*) AS n FROM photos WHERE status = 'ready' GROUP BY 1")
+    ).all()
     return {
+        "statuts": [{"value": r.k, "count": r.n} for r in statuts],
         "types": [{"value": r.k, "count": r.n} for r in types],
         "vlm": [{"value": r.k, "count": r.n} for r in vlm],
         "scenes": [{"value": r.k, "count": r.n} for r in scenes],

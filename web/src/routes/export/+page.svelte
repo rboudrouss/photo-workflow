@@ -8,7 +8,10 @@
 		media,
 		publicBase,
 		exportDelcampe,
+		delcampeSync,
 		isExplicit,
+		DELCAMPE_STATUSES,
+		type DelcampeStatus,
 		type DelcampeCategory,
 		type ExportOptions,
 		type ExportRow
@@ -61,7 +64,8 @@
 	const categoryOf = (r: ExportRow) => overrides[r.id]?.category_id ?? r.category_id;
 
 	let missing = $derived(rows.filter((r) => !categoryOf(r)));
-	let withWarnings = $derived(rows.filter((r) => r.warnings.length || !categoryOf(r)));
+	let blocked = $derived(rows.filter((r) => r.blocked));
+	let withWarnings = $derived(rows.filter((r) => r.warnings.length || !categoryOf(r) || r.blocked));
 	let shown = $derived.by(() => {
 		let out = onlyIssues ? withWarnings : rows;
 		const key = order;
@@ -133,6 +137,44 @@
 			error = e.message;
 		} finally {
 			busy = false;
+		}
+	}
+
+	function dropBlocked() {
+		const ids = blocked.map((r) => r.id);
+		setSelected(ids, false);
+		rows = rows.filter((r) => !r.blocked);
+	}
+
+	// Statut applique a toute la selection (apres confirmation de l'import par Delcampe, par exemple).
+	let bulkStatus = $state<DelcampeStatus | ''>('en_vente');
+	async function applyStatus() {
+		const status = bulkStatus || null;
+		const what = status ? `« ${DELCAMPE_STATUSES[status]} »` : 'sans statut';
+		if (!confirm(`Passer les ${rows.length} photos de la selection en ${what} ?`)) return;
+		try {
+			const r = await api.setDelcampeStatus(rows.map((x) => x.id), status);
+			done = `${r.updated} statut(s) mis a jour.`;
+			await load();
+		} catch (e: any) {
+			error = e.message;
+		}
+	}
+
+	// Fichier exporte depuis Delcampe (ventes en cours, vendues...) : statuts d'apres les references pf-...
+	let syncFile = $state<File | null>(null);
+	let syncStatus = $state<'en_vente' | 'vendue' | 'retiree'>('en_vente');
+	let syncResult = $state('');
+	async function sync() {
+		if (!syncFile) return;
+		syncResult = '';
+		try {
+			const r = await delcampeSync(syncFile, syncStatus);
+			syncResult = `${r.refs} reference(s) dans le fichier, ${r.matched} photo(s) reconnue(s), ${r.updated} mise(s) a jour.`;
+			if (r.unknown.length) syncResult += ` Inconnues : ${r.unknown.map((x) => 'pf-' + x).join(', ')}.`;
+			await load();
+		} catch (e: any) {
+			syncResult = e.message;
 		}
 	}
 
@@ -211,10 +253,14 @@
 	</section>
 
 	<div class="actions">
-		<button class="primary" onclick={download} disabled={busy || loading || !rows.length || missing.length > 0}>
+		<button class="primary" onclick={download} disabled={busy || loading || !rows.length || missing.length > 0 || blocked.length > 0}>
 			Telecharger le fichier ({rows.length} fiche{rows.length > 1 ? 's' : ''}){busy ? ' …' : ''}
 		</button>
 		{#if missing.length}<span class="warn">{missing.length} photo(s) sans categorie : la choisir dans le tableau.</span>{/if}
+		{#if blocked.length}
+			<span class="warn">{blocked.length} photo(s) deja en vente ou vendue(s).</span>
+			<button onclick={dropBlocked}>Les retirer de la selection</button>
+		{/if}
 		{#if done}<span class="ok">{done}</span>{/if}
 		{#if error}<span class="warn">{error}</span>{/if}
 	</div>
@@ -225,6 +271,30 @@
 		· <button class="link" onclick={() => revoke(true)} disabled={!links}>tous les desactiver</button>.
 		Delcampe garde sa copie des images : on peut desactiver une fois l'import confirme par e-mail.
 	</p>
+
+	<section class="status">
+		<label>Statut Delcampe de la selection
+			<select bind:value={bulkStatus}>
+				{#each Object.entries(DELCAMPE_STATUSES) as [k, label]}<option value={k}>{label}</option>{/each}
+				<option value="">aucun (effacer)</option>
+			</select>
+		</label>
+		<button onclick={applyStatus} disabled={!rows.length}>Appliquer aux {rows.length} photos</button>
+		<span class="sep"></span>
+		<label title="Depuis Delcampe : ventes en cours, vendues ou invendues, exportees en Excel ou CSV (Store Plus). Les references pf-... du fichier suffisent.">
+			Fichier exporte de Delcampe
+			<input type="file" accept=".csv,.xlsx,.txt" onchange={(e) => (syncFile = e.currentTarget.files?.[0] ?? null)} />
+		</label>
+		<label>Ces photos sont
+			<select bind:value={syncStatus}>
+				<option value="en_vente">en vente</option>
+				<option value="vendue">vendues</option>
+				<option value="retiree">retirees / invendues</option>
+			</select>
+		</label>
+		<button onclick={sync} disabled={!syncFile}>Mettre a jour</button>
+		{#if syncResult}<span class="muted">{syncResult}</span>{/if}
+	</section>
 
 	<div class="tools">
 		<label>Ordre
@@ -248,10 +318,11 @@
 			<tbody>
 				{#each shown as r (r.id)}
 					{@const cat = categoryOf(r)}
-					<tr class:bad={!cat}>
+					<tr class:bad={!cat || r.blocked}>
 						<td><a href={`/photo/${r.id}`}><img src={media(r.media.thumb)} alt="" loading="lazy" class:blur={blur.on && isExplicit(r.nudity_level)} /></a></td>
 						<td class="fiche">
 							<a href={`/photo/${r.id}`}>{r.title}</a>
+							{#if r.status}<span class="st st-{r.status}" title={r.status_at ? `depuis le ${new Date(r.status_at).toLocaleDateString('fr-FR')}` : ''}>{DELCAMPE_STATUSES[r.status]}</span>{/if}
 							<div class="muted">{r.reference} · {r.filename}{#if r.public_url} · <a href={r.public_url} target="_blank" rel="noreferrer">lien public</a>{/if}</div>
 							{#each r.warnings as w}<span class="w">{w}</span>{/each}
 							<details><summary class="muted">description</summary><p>{r.description}</p></details>
@@ -340,6 +411,46 @@
 	}
 	.link:disabled {
 		color: #666;
+	}
+	.status {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.8rem;
+		align-items: end;
+		margin: 1rem 0;
+		padding: 0.7rem;
+		background: #1a1a1a;
+		border-radius: 6px;
+	}
+	.status label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		font-size: 0.8rem;
+		color: #aaa;
+	}
+	.status .sep {
+		width: 1px;
+		align-self: stretch;
+		background: #333;
+	}
+	.st {
+		display: inline-block;
+		margin-left: 0.4rem;
+		font-size: 0.72rem;
+		padding: 0 0.35rem;
+		border-radius: 3px;
+		background: #333;
+	}
+	.st-exportee {
+		background: #5a4a1a;
+		color: #fe9;
+	}
+	.st-en_vente {
+		background: #1d4f7a;
+	}
+	.st-vendue {
+		background: #2d6a3e;
 	}
 	.tools {
 		display: flex;

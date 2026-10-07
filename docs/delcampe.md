@@ -52,7 +52,8 @@ Sources (relues le 7 oct. 2026) : [Easy Uploader](https://www.delcampe-support.c
    aléatoire de 256 bits, créé à l'export, sans mot de passe, image en 2400 px (`PUBLIC_IMAGE_SIZE`), marquée
    `noindex`. Rien d'autre du site n'est accessible sans mot de passe. Delcampe garde sa propre copie : une fois
    l'import confirmé par e-mail, on peut désactiver les liens depuis la page Export (sélection ou tous).
-5. **La fiche à coller** reste disponible sur la page d'une photo (« Copier la fiche Delcampe »), pour la saisie
+5. **Le statut de publication** (voir plus bas) empêche de publier deux fois la même photo.
+6. **La fiche à coller** reste disponible sur la page d'une photo (« Copier la fiche Delcampe »), pour la saisie
    manuelle.
 
 ### Rubriques
@@ -66,6 +67,28 @@ Hors photographies (cartes postales, pièces, billets, chromos, documents), l'ar
 (département, règne, marque) : la rubrique se choisit sur la page Export (« autre numéro… », numéros sur la
 [liste des catégories](https://www.delcampe.net/en_GB/collectables/category-id)).
 
+### Statut de publication
+
+Chaque photo a un statut Delcampe, vide au départ :
+
+| Statut | Quand | Effet |
+|---|---|---|
+| validée | fiche relue, à la main (page photo ou page Export) | aucun, repère pour soi |
+| exportée | posé automatiquement au téléchargement du fichier, avec la date | réexport possible, avec un avertissement « déjà exportée le … » (cas d'un objet refusé à l'import) |
+| en vente | import confirmé par Delcampe | **l'export la refuse** |
+| vendue | | **l'export la refuse** ; « en vente » ne l'écrase pas |
+| retirée | retirée de la vente ou invendue | peut repartir dans un export |
+
+Dans la grille : filtre « delcampe » (« à publier » = ni exportée, ni en vente, ni vendue), avec un badge sur les
+vignettes. Pour mettre à jour :
+
+- **Toute la sélection** d'un coup sur la page Export (« Statut Delcampe de la sélection »), par exemple « en
+  vente » une fois l'e-mail de confirmation de l'import reçu ;
+- **depuis un fichier de Delcampe** : avec Store Plus, les listes de ventes en cours, vendues ou invendues
+  s'exportent en Excel ou CSV. On dépose le fichier sur la page Export et on choisit le statut ; photoflow y
+  cherche les références `pf-…`, quelles que soient les colonnes, et met à jour les photos reconnues ;
+- **une photo** sur sa page.
+
 ### Référence perso
 
 `personal_reference` vaut `pf-` suivi du début de l'id de la photo. Taper cette référence dans la recherche de
@@ -78,8 +101,10 @@ photoflow retrouve la photo, par exemple depuis une vente ou l'export CSV des ve
    colonnes sont toujours celles de `delcampe.COLUMNS`.
 3. Créer sur Delcampe le modèle de frais de port et reporter son nom exact dans les options d'export.
 4. Exporter une petite sélection, l'importer (« Hosted from a web server »), vérifier l'aperçu et les ventes.
-5. Exporter le reste par lots, trié par potentiel de vente. Désactiver les liens publics une fois les imports
-   confirmés.
+5. Exporter le reste par lots : filtre « à publier », tri par potentiel de vente, « cocher les N résultats ».
+   Une fois l'import confirmé, passer la sélection « en vente » et désactiver ses liens publics.
+6. De temps en temps, exporter de Delcampe les ventes conclues et déposer le fichier sur la page Export
+   (statut « vendue »).
 
 ## Nudité
 
@@ -89,6 +114,5 @@ page photo si besoin) et vérifier les règles en vigueur côté Delcampe pour c
 
 ## Reste à faire
 
-- Un statut de publication par photo (à relire, exportée, publiée, vendue) pour ne jamais publier deux fois.
 - Une politique de prix (par rubrique et potentiel, ou d'après des ventes comparables) ; aujourd'hui un prix
   par défaut et des prix à la ligne.

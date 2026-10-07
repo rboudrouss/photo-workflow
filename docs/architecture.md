@@ -141,7 +141,7 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 
 | Table | Clé | Contenu |
 |---|---|---|
-| `photos` | id | fichier, dimensions, pHash, statut, `public_token` du lien public (export Delcampe) |
+| `photos` | id | fichier, dimensions, pHash, statut, `public_token` du lien public et `delcampe_status` (export Delcampe) |
 | `jobs` | (photo, extractor) | file de travail ; `reserved_for` = worker distant désigné |
 | `workers` | id | worker distant : nom, jeton haché, état de ses instances |
 | `pair_requests` | code | demandes d'appairage en attente d'approbation (15 min) |
@@ -167,7 +167,8 @@ les propositions (`/api/tags`) sont calculées sur les résultats courants. L'in
 barre du haut vaut pour toutes les pages. Tri par potentiel de vente ou Instagram (notes du VLM).
 
 On coche des photos dans la grille (Maj+clic pour une plage, ou tous les résultats d'un filtre) ; la sélection
-est gardée dans le navigateur et devient un fichier Easy Uploader sur la page Export (`docs/delcampe.md`).
+est gardée dans le navigateur et devient un fichier Easy Uploader sur la page Export (`docs/delcampe.md`). Le
+statut Delcampe de chaque photo (exportée, en vente, vendue…) empêche de publier deux fois la même.
 
 L'interface est aussi l'outil de correction : chaque sauvegarde crée ou met à jour la légende `human`, qui prime
 ensuite partout. Nommer un groupe de visages crée une personne et l'attache à tout le groupe.

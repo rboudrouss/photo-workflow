@@ -55,6 +55,9 @@ class Photo(Base):
     series_id: Mapped[int | None] = mapped_column(ForeignKey("series.id", ondelete="SET NULL"), index=True)
     # Jeton du lien public /pub/<jeton>.jpg (export Delcampe), NULL = pas de lien. Voir delcampe.py.
     public_token: Mapped[str | None] = mapped_column(Text, unique=True)
+    # Suivi Delcampe (delcampe.STATUSES) : validee | exportee | en_vente | vendue | retiree ; NULL = rien encore.
+    delcampe_status: Mapped[str | None] = mapped_column(String(16), index=True)
+    delcampe_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     captions: Mapped[list["Caption"]] = relationship(back_populates="photo", cascade="all, delete-orphan")
