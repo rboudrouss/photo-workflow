@@ -76,7 +76,21 @@ def derived_paths(photo_id: uuid.UUID) -> dict[str, Path]:
     return {
         "thumb": sub / f"{photo_id}_thumb.jpg",
         "web": sub / f"{photo_id}_web.jpg",
+        "public": sub / f"{photo_id}_public.jpg",
     }
+
+
+def public_image(photo_id: uuid.UUID, rel_path: str) -> Path:
+    """JPEG du lien public (export Delcampe) : plus grand que le derive web, cree a la premiere demande et garde."""
+    path = derived_paths(photo_id)["public"]
+    if not path.exists():
+        img, *_ = open_for_ingest(original_path(rel_path), settings.public_image_size)
+        img.thumbnail((settings.public_image_size, settings.public_image_size), Image.Resampling.LANCZOS)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        img.save(tmp, "JPEG", quality=90, optimize=True)
+        tmp.replace(path)
+    return path
 
 
 def make_derived(img: Image.Image, photo_id: uuid.UUID) -> dict[str, Path]:

@@ -206,7 +206,8 @@ def _needing_sql(extractor: str, count: bool) -> str:
     """Photos qu'il reste a traiter pour cet extracteur, hors celles deja en cours ou reservees a un autre.
 
     - extracteurs classiques : pas d'extraction, ou extraction d'une version plus ancienne que celle du worker.
-    - vlm : pas de legende machine, ou meilleure legende issue d'un modele de rang inferieur (modelrank.py).
+    - vlm : pas de legende machine, meilleure legende issue d'un modele de rang inferieur (modelrank.py), ou
+      analyse d'une version plus ancienne du schema par un modele de rang au plus egal (champs manquants).
       Les jamais-analysees passent en premier, puis les plus faiblement analysees.
     """
     exclude = (
@@ -220,7 +221,9 @@ def _needing_sql(extractor: str, count: bool) -> str:
             "WITH best AS (SELECT photo_id, coalesce(max(model_rank), 0) AS r FROM captions "
             "WHERE source <> 'human' GROUP BY photo_id) "
             f"SELECT {select_} FROM photos p LEFT JOIN best b ON b.photo_id = p.id "
-            f"WHERE p.status = 'ready' AND (b.r IS NULL OR b.r < :rank) {exclude} {order}"
+            "WHERE p.status = 'ready' AND (b.r IS NULL OR b.r < :rank OR (b.r <= :rank AND NOT EXISTS ("
+            "SELECT 1 FROM extractions e WHERE e.photo_id = p.id AND e.extractor = 'vlm' AND e.version >= :ver))) "
+            f"{exclude} {order}"
         )
     select_ = "count(*)" if count else "p.id"
     order = "" if count else "ORDER BY p.ingested_at LIMIT :n"

@@ -1,8 +1,9 @@
 /**
  * Deux roles cote serveur Node (adapter-node), pour n'exposer qu'une seule origine publique :
  *  1. mot de passe (Basic) sur tout le site si UI_USER/UI_PASSWORD sont definis, SAUF /api/worker/* qui est
- *     reserve aux workers distants (jeton verifie par l'API) ;
- *  2. relais de /api/* et /media/* vers l'API interne (API_INTERNAL, ex. http://api:8000), en flux, pour
+ *     reserve aux workers distants (jeton verifie par l'API) et GET /pub/<jeton>.jpg, images publiques de l'export
+ *     Delcampe (jeton aleatoire et revocable, verifie par l'API) ;
+ *  2. relais de /api/*, /media/* et /pub/* vers l'API interne (API_INTERNAL, ex. http://api:8000), en flux, pour
  *     que le navigateur ne parle qu'au site (pas de CORS, pas de second domaine).
  * En dev (vite), API_INTERNAL n'est pas defini et le navigateur appelle l'API directement (PUBLIC_API_BASE).
  */
@@ -10,8 +11,9 @@ import type { Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { timingSafeEqual } from 'node:crypto';
 
-const PROXIED = ['/api/', '/media/'];
+const PROXIED = ['/api/', '/media/', '/pub/'];
 const WORKER_PREFIX = '/api/worker/';
+const PUBLIC_PREFIX = '/pub/';
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** Origine publique du site : ORIGIN si defini, sinon deduite des en-tetes (Traefik : x-forwarded-*). */
@@ -54,12 +56,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// Sonde du conteneur (healthcheck) : sans mot de passe, ne revele rien.
 	if (pathname === '/healthz') return new Response('ok');
 	const isWorker = pathname.startsWith(WORKER_PREFIX);
+	const isPublic = pathname.startsWith(PUBLIC_PREFIX) && (event.request.method === 'GET' || event.request.method === 'HEAD');
 
 	if (crossSiteForm(event.request)) {
 		return new Response('Cross-site POST form submissions are forbidden', { status: 403 });
 	}
 
-	if (!isWorker && !authorized(event.request)) {
+	if (!isWorker && !isPublic && !authorized(event.request)) {
 		return new Response('Authentification requise', {
 			status: 401,
 			headers: { 'WWW-Authenticate': 'Basic realm="photoflow", charset="UTF-8"' }

@@ -13,7 +13,7 @@ from typing import Any
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 Str200 = Annotated[str, StringConstraints(max_length=200)]
 
@@ -168,6 +168,52 @@ class Piece(BaseModel):
     nombre: int = Field(description="Nombre de pieces visibles sur le scan.")
 
 
+class CategorieDelcampe(str, Enum):
+    """Rubriques de Delcampe > Photographie > Photographies (originaux). Le numero Delcampe correspondant est
+    dans delcampe.py ; les nus y sont ranges d'office par epoque, et les autres objets se choisissent a l'export."""
+
+    lieux_europe = "lieux_europe"
+    lieux_afrique = "lieux_afrique"
+    lieux_amerique = "lieux_amerique"
+    lieux_asie = "lieux_asie"
+    lieux_oceanie = "lieux_oceanie"
+    lieux = "lieux"
+    personnes_anonymes = "personnes_anonymes"
+    personnes_identifiees = "personnes_identifiees"
+    celebrites = "celebrites"
+    metiers = "metiers"
+    militaire = "militaire"
+    automobiles = "automobiles"
+    aviation = "aviation"
+    bateaux = "bateaux"
+    trains = "trains"
+    cyclisme = "cyclisme"
+    sports = "sports"
+    objets = "objets"
+    ethnographie = "ethnographie"
+    pin_up = "pin_up"
+    nus = "nus"
+    avant_1900 = "avant_1900"
+    stereoscopie = "stereoscopie"
+    autre = "autre"
+
+
+class Potentiel(BaseModel):
+    """Deux notes independantes pour choisir quoi publier en premier, sur Delcampe et sur Instagram."""
+
+    model_config = ConfigDict(extra="forbid")
+    vente: int = Field(ge=0, le=10, description="Potentiel de vente sur Delcampe, 0 a 10. Demande des collectionneurs (militaria, metiers, vehicules, scenes de rue localisables, evenements, photographe identifie, nus anciens), rarete du sujet, qualite et etat du tirage. 0-2 : sans valeur (verso, flou, portrait anonyme banal abime) ; 3-4 : courant ; 5-6 : interessant ; 7-8 : recherche ; 9-10 : exceptionnel. Sois exigeant, la plupart des photos sont entre 2 et 5.")
+    vente_raison: str = Field(max_length=200, description="Une phrase : ce qui fait monter ou baisser la note de vente.")
+    instagram: int = Field(ge=0, le=10, description="Interet visuel pour Instagram, 0 a 10, independant de la valeur marchande. Composition, lumiere, emotion, humour, etrangete, charme d'epoque, lisible en petit format. 0-2 : terne ou illisible ; 5 : agreable ; 8-10 : image forte qui arrete le defilement. Sois exigeant. 0 si nudite partielle ou integrale (interdite sur Instagram).")
+    instagram_raison: str = Field(max_length=200, description="Une phrase : ce qui rend l'image forte ou faible visuellement.")
+
+    @field_validator("vente", "instagram", mode="before")
+    @classmethod
+    def _borne(cls, v: Any) -> Any:
+        """Les sorties structurees Claude ne portent pas les bornes : on ramene dans 0-10 au lieu d'echouer."""
+        return max(0, min(10, v)) if isinstance(v, int) else v
+
+
 class PhotoAnalysis(BaseModel):
     """Resultat structure d'une analyse de photo ancienne."""
 
@@ -191,8 +237,8 @@ class PhotoAnalysis(BaseModel):
     epoque: Epoque
     lieu: Lieu
     etat: list[Str200] = Field(max_length=10, description="Defauts physiques visibles : taches, pliures, dechirures, jaunissement, coins abimes, rayures. Liste vide si bon etat.")
-    interet_vente: Confiance = Field(description="Interet probable pour un collectionneur : forte pour militaria, vehicules anciens, metiers, scenes de rue identifiables ; faible pour portrait anonyme banal.")
-    categorie_delcampe: str = Field(max_length=120, description="Categorie Delcampe suggeree, ex: 'Photographie > Photos anciennes > Militaria', 'Cartes postales > France > Bretagne'.")
+    potentiel: Potentiel
+    categorie_delcampe: CategorieDelcampe = Field(description="Rubrique Delcampe des photographies originales : le sujet principal (metiers, militaire, automobiles...), sinon lieux_<continent> pour une vue de lieu localisable, personnes_anonymes pour un portrait ou un groupe sans sujet particulier, avant_1900 pour un tirage du XIXe sans autre rubrique, nus pour toute nudite partielle ou integrale. autre si rien ne convient ou si ce n'est pas une photographie.")
     incertitudes: list[Str200] = Field(max_length=10, description="Ce dont le modele n'est pas sur et qu'un humain devrait verifier.")
     nudite: Nudite
 
@@ -205,6 +251,8 @@ class PhotoAnalysis(BaseModel):
             self.carte_postale = None
         if self.type_objet not in (TypeObjet.piece_monnaie, TypeObjet.medaille_jeton):
             self.piece = None
+        if self.nudite.niveau in (NiveauNudite.partielle, NiveauNudite.integrale):
+            self.potentiel.instagram = 0
         return self
 
 
@@ -224,15 +272,17 @@ Regles :
 - Transcris tout texte lisible exactement, y compris les annotations manuscrites sur les etuis de pieces.
 - Pieces et medailles : lis la legende, le millesime, la valeur, identifie le type (Semeuse, Turin, Morlon, Ceres,
   Napoleon III, Hercule, Marianne...) et le metal probable ; estime l'etat avec les sigles usuels (B, TB, TTB, SUP,
-  SPL, FDC) en restant prudent ; compte les pieces. Categorie Delcampe : Monnaies > ...
+  SPL, FDC) en restant prudent ; compte les pieces. categorie_delcampe = autre.
 - Cartes postales : editeur, numero, legende imprimee, carte-photo ou imprimee, voyagee ou non ; si on voit un
   cachet, date et lieu. Le lieu de la legende imprimee est une information forte pour `lieu`.
 - Chromos et images : editeur ou marque, serie, legende.
-- Verso : type_objet = photographie, face = verso, titre du type 'Verso de tirage ...', interet_vente faible, et
+- Verso : type_objet = photographie, face = verso, titre du type 'Verso de tirage ...', potentiel de vente 0 a 1, et
   transcris tout (marque du papier, numeros, tampons). Ne decris pas une scene qui n'existe pas.
 - Plusieurs objets : nombre_objets > 1 et un resume par objet dans `lot` ; le titre parle du lot.
 - Le titre doit etre vendeur mais honnete : sujet precis, lieu si connu, epoque estimee.
 - La description doit aider un acheteur : sujet, details interessants, ce qui rend la photo rare, les reserves sur ce qui est incertain, l'etat.
+- Potentiel : deux notes independantes. Une photo banale peut etre tres belle (instagram haut, vente bas) et une
+  photo recherchee peut etre visuellement terne. Note avec exigence : la note moyenne du fonds est autour de 3-4.
 - Nudite : le fonds contient des photos de charme et des nus anciens, il faut les classer correctement, sans pudeur ni exces. Maillots de bain, plage, baignade, torse nu masculin, enfants en tenue de bain, sous-vetements ordinaires = niveau "aucune". "suggestive" seulement si la pose ou la tenue est clairement erotisee. "partielle" si poitrine feminine ou fesses sont decouvertes. "integrale" si le sexe est visible. Ne jamais deduire une nudite d'une zone floue ou sombre.
 - Reponds uniquement avec le JSON demande."""
 
@@ -240,13 +290,13 @@ USER_PROMPT = "Analyse cette photo et remplis tous les champs du schema."
 
 
 def json_schema(strip_lengths: bool = False) -> dict:
-    """JSON schema impose au modele. strip_lengths retire maxLength/maxItems (bornes utiles a la grammaire
-    llama.cpp pour empecher les boucles, mais hors du sous-ensemble accepte par les sorties structurees Claude)."""
+    """JSON schema impose au modele. strip_lengths retire maxLength/maxItems et les bornes numeriques (utiles a
+    la grammaire llama.cpp, mais hors du sous-ensemble accepte par les sorties structurees Claude)."""
     schema = PhotoAnalysis.model_json_schema()
     if strip_lengths:
         def strip(node):
             if isinstance(node, dict):
-                for k in ("maxLength", "minLength", "maxItems", "minItems", "pattern"):
+                for k in ("maxLength", "minLength", "maxItems", "minItems", "pattern", "minimum", "maximum"):
                     node.pop(k, None)
                 for v in node.values():
                     strip(v)
@@ -301,7 +351,9 @@ def get_backend(name: str | None = None) -> VLMBackend:
 
 class VLMExtractor(Extractor):
     name = "vlm"
-    version = 1
+    # 2 : potentiel (vente, instagram) et categorie Delcampe fermee. Un worker en v2 reprend les photos analysees
+    # en v1 par un modele de rang inferieur ou egal au sien (workers.py).
+    version = 2
     batch_size = 1
 
     def __init__(self, backend: VLMBackend | None = None) -> None:

@@ -2,11 +2,15 @@
 
 Routes principales :
   GET  /api/stats
-  GET  /api/photos?q=&mode=text|vector&page=&page_size=
+  GET  /api/photos?q=&mode=text|vector&sort=&page=&page_size=
+  GET  /api/photos/ids             ids de tous les resultats (selection)
   GET  /api/photos/{id}            photo + legendes + extractions + visages + proches + doublons
   PUT  /api/photos/{id}/caption    legende humaine
   GET  /api/photos/{id}/fiche      texte pret a coller sur Delcampe
-  GET  /api/export/delcampe.csv?ids=a,b,c
+  GET  /api/delcampe/categories    rubriques proposees a l'export
+  POST /api/export/delcampe/preview, POST /api/export/delcampe   fichier Easy Uploader (xlsx ou csv)
+  GET  /api/public-links, POST /api/public-links/revoke          liens publics des images
+  GET  /pub/{jeton}.jpg            image publique (sans mot de passe, pour Delcampe)
   POST /api/upload                 televerser des photos (multipart, champ files)
   GET  /api/series, /api/series/{id}, PUT /api/series/{id}, POST /api/series/{id}/propagate
   GET  /api/faces/clusters         clusters de visages
@@ -22,14 +26,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import io
+import re
 import uuid
 from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, Response
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -37,7 +42,7 @@ from .. import delcampe, ingest
 from ..config import settings
 from ..nudity import LEVELS as NUDITY_LEVELS, apply_level
 from ..db import get_session
-from ..images import SUPPORTED_EXT, derived_paths, open_image, original_path
+from ..images import SUPPORTED_EXT, derived_paths, open_image, original_path, public_image
 from ..models import Caption, Face, Person, Photo, Series
 from ..queue import stats as job_stats
 
@@ -236,6 +241,29 @@ _DESCRIBED_FIRST = (
 )
 
 
+
+
+def _potentiel_sql(key: str) -> str:
+    """Note du meilleur modele (rang le plus haut, puis le plus recent) : la copie dans la legende humaine peut
+    dater d'une analyse plus faible."""
+    return (
+        f"(SELECT (c.data->'potentiel'->>'{key}')::int FROM captions c WHERE c.photo_id = p.id "
+        "AND c.source <> 'human' AND c.data->'potentiel' IS NOT NULL "
+        "ORDER BY c.model_rank DESC NULLS LAST, c.updated_at DESC LIMIT 1)"
+    )
+
+
+_ORDER = {
+    "recent": f"{_DESCRIBED_FIRST}, p.ingested_at DESC, p.id",
+    "vente": f"vente DESC NULLS LAST, instagram DESC NULLS LAST, {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id",
+    "instagram": f"instagram DESC NULLS LAST, vente DESC NULLS LAST, {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id",
+}
+_COLUMNS = f"p.*, {{title}} AS title, {_potentiel_sql('vente')} AS vente, {_potentiel_sql('instagram')} AS instagram"
+
+# Reference perso des fiches Delcampe (delcampe.reference) : « pf- » + debut de l'id.
+_REF = re.compile(r"^pf-?([0-9a-f]{6,32})$", re.I)
+
+
 # Tags compares sous forme normalisee : sans casse, sans accents, "_" et "-" comme espaces. Ainsi
 # "République française", "republique_francaise" et "republique francaise" sont le meme tag.
 _TAG_FROM = "àáâäãåçèéêëìíîïñòóôöõùúûüýÿœæ_-"
@@ -296,18 +324,27 @@ class PhotoFilters:
             where.append(_HAS_TAG.format(param=f":tag{i}"))
             params[f"tag{i}"] = t
         if text_query and self.q and self.mode == "text":
-            where.append(
-                "(EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND "
-                "(c.tsv @@ websearch_to_tsquery('french', :q) OR c.title ILIKE :like OR c.description ILIKE :like)) "
-                "OR p.filename ILIKE :like)"
-            )
-            params["q"], params["like"] = self.q, f"%{self.q}%"
+            ref = _REF.match(self.q.strip())
+            if ref:
+                where.append("replace(p.id::text, '-', '') LIKE :ref")
+                params["ref"] = ref.group(1).lower() + "%"
+            else:
+                where.append(
+                    "(EXISTS (SELECT 1 FROM captions c WHERE c.photo_id = p.id AND "
+                    "(c.tsv @@ websearch_to_tsquery('french', :q) OR c.title ILIKE :like OR c.description ILIKE :like)) "
+                    "OR p.filename ILIKE :like)"
+                )
+                params["q"], params["like"] = self.q, f"%{self.q}%"
         return where
+
+
+Sort = Literal["recent", "vente", "instagram"]
 
 
 @app.get("/api/photos")
 def list_photos(
     f: PhotoFilters = Depends(),
+    sort: Sort = "recent",
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=500),
     session: Session = Depends(get_session),
@@ -316,6 +353,7 @@ def list_photos(
     offset = (page - 1) * page_size
     params: dict = {"limit": page_size, "offset": offset}
     where = f.where(params)
+    cols = _COLUMNS.format(title=_best_title_sql())
 
     if q and mode == "vector":
         if local_encoder_available():
@@ -330,26 +368,20 @@ def list_photos(
             if len(vec) != settings.embedding_dim:
                 raise HTTPException(502, "vecteur de requete invalide")
         params["vec"] = str(vec)
+        # Triee par proximite : le tri demande ne s'applique pas.
         sql = f"""
-            SELECT p.*, {_best_title_sql()} AS title, 1 - (e.embedding <=> CAST(:vec AS vector)) AS score
+            SELECT {cols}, 1 - (e.embedding <=> CAST(:vec AS vector)) AS score
             FROM photos p JOIN image_embeddings e ON e.photo_id = p.id
             WHERE {' AND '.join(where)}
             ORDER BY e.embedding <=> CAST(:vec AS vector)
             LIMIT :limit OFFSET :offset
         """
         total = None
-    elif q:
-        sql = f"""
-            SELECT p.*, {_best_title_sql()} AS title, NULL::float AS score
-            FROM photos p WHERE {' AND '.join(where)}
-            ORDER BY {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id LIMIT :limit OFFSET :offset
-        """
-        total = session.scalar(text(f"SELECT count(*) FROM photos p WHERE {' AND '.join(where)}"), params)
     else:
         sql = f"""
-            SELECT p.*, {_best_title_sql()} AS title, NULL::float AS score
+            SELECT {cols}, NULL::float AS score
             FROM photos p WHERE {' AND '.join(where)}
-            ORDER BY {_DESCRIBED_FIRST}, p.ingested_at DESC, p.id LIMIT :limit OFFSET :offset
+            ORDER BY {_ORDER[sort]} LIMIT :limit OFFSET :offset
         """
         total = session.scalar(text(f"SELECT count(*) FROM photos p WHERE {' AND '.join(where)}"), params)
 
@@ -358,10 +390,32 @@ def list_photos(
         {
             "id": str(r["id"]), "filename": r["filename"], "width": r["width"], "height": r["height"],
             "title": r["title"], "score": r["score"], "nudity_level": r["nudity_level"], "media": _media(r["id"]),
+            "potentiel": {"vente": r["vente"], "instagram": r["instagram"]} if r["vente"] is not None else None,
         }
         for r in rows
     ]
     return {"items": items, "page": page, "page_size": page_size, "total": total}
+
+
+MAX_SELECTION = 10000
+
+
+@app.get("/api/photos/ids")
+def list_photo_ids(f: PhotoFilters = Depends(), sort: Sort = "recent", session: Session = Depends(get_session)):
+    """Ids de tous les resultats (hors recherche semantique, qui n'a pas de fin), pour « tout selectionner »."""
+    if f.q and f.mode == "vector":
+        raise HTTPException(400, "pas de selection globale en recherche semantique")
+    params: dict = {"limit": MAX_SELECTION}
+    where = f.where(params)
+    vente, instagram = _potentiel_sql("vente"), _potentiel_sql("instagram")
+    ids = session.execute(
+        text(f"""
+            SELECT p.id, {vente} AS vente, {instagram} AS instagram FROM photos p WHERE {' AND '.join(where)}
+            ORDER BY {_ORDER[sort]} LIMIT :limit
+        """),
+        params,
+    ).scalars().all()
+    return {"ids": [str(i) for i in ids], "truncated": len(ids) == MAX_SELECTION}
 
 
 @app.get("/api/photos/{photo_id}")
@@ -490,11 +544,71 @@ def get_fiche(photo_id: uuid.UUID, session: Session = Depends(get_session)):
     return delcampe.fiche(session, p)
 
 
-@app.get("/api/export/delcampe.csv")
-def export_delcampe(ids: str, session: Session = Depends(get_session)):
-    photo_ids = [uuid.UUID(x) for x in ids.split(",") if x]
-    csv_text = delcampe.export_csv(session, photo_ids)
-    return PlainTextResponse(csv_text, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=delcampe.csv"})
+@app.get("/api/delcampe/categories")
+def delcampe_categories():
+    return [{"id": k, "label": v} for k, v in delcampe.CATEGORY_LABELS.items()]
+
+
+class ExportPreviewIn(BaseModel):
+    ids: list[uuid.UUID] = Field(max_length=MAX_SELECTION)
+    base_url: str | None = Field(default=None, pattern=r"^https?://[^/\s]+$")
+
+
+def _photos_in_order(session: Session, ids: list[uuid.UUID]) -> list[Photo]:
+    found = {p.id: p for p in session.scalars(select(Photo).where(Photo.id.in_(ids))).all()}
+    return [found[i] for i in dict.fromkeys(ids) if i in found]
+
+
+@app.post("/api/export/delcampe/preview")
+def export_delcampe_preview(body: ExportPreviewIn, session: Session = Depends(get_session)):
+    """Les lignes du futur fichier, avec ce qu'il faut verifier (categorie manquante, titre raccourci...)."""
+    rows = []
+    for p in _photos_in_order(session, body.ids):
+        r = delcampe.preview_row(session, p, body.base_url)
+        r["media"] = _media(p.id)
+        rows.append(r)
+    return {"items": rows}
+
+
+class ExportIn(ExportPreviewIn):
+    base_url: str = Field(pattern=r"^https?://[^/\s]+$")  # origine publique du site, pour les URL des images
+    format: Literal["xlsx", "csv"] = "xlsx"
+    options: delcampe.ExportOptions = delcampe.ExportOptions()
+    overrides: dict[uuid.UUID, delcampe.RowOverride] = {}
+
+
+@app.post("/api/export/delcampe")
+def export_delcampe(body: ExportIn, session: Session = Depends(get_session)):
+    """Fichier Easy Uploader. Cree les liens publics des images qui n'en ont pas encore (Delcampe les telecharge
+    a l'import) ; ils restent actifs jusqu'a revocation."""
+    photos = _photos_in_order(session, body.ids)
+    rows, missing = delcampe.build_rows(session, photos, body.options, body.overrides, body.base_url)
+    if missing:
+        session.rollback()
+        raise HTTPException(422, {"message": "categorie manquante", "ids": missing})
+    session.commit()
+    if body.format == "csv":
+        content, media_type = delcampe.to_csv(rows), "text/csv; charset=utf-8"
+    else:
+        content, media_type = delcampe.to_xlsx(rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return Response(content, media_type=media_type,
+                    headers={"Content-Disposition": f"attachment; filename=delcampe.{body.format}"})
+
+
+@app.get("/api/public-links")
+def public_links(session: Session = Depends(get_session)):
+    return {"count": session.scalar(text("SELECT count(*) FROM photos WHERE public_token IS NOT NULL"))}
+
+
+class RevokeIn(BaseModel):
+    ids: list[uuid.UUID] | None = Field(default=None, max_length=MAX_SELECTION)  # None : tous les liens
+
+
+@app.post("/api/public-links/revoke")
+def revoke_public_links(body: RevokeIn, session: Session = Depends(get_session)):
+    n = delcampe.revoke_public_tokens(session, body.ids)
+    session.commit()
+    return {"revoked": n}
 
 
 @app.get("/api/facets")
@@ -796,6 +910,18 @@ def media(kind: Literal["thumb", "web"], photo_id: uuid.UUID):
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.api_route("/pub/{token}.jpg", methods=["GET", "HEAD"])
+def public_media(token: str, session: Session = Depends(get_session)):
+    """Image publique : seul le jeton (aleatoire, revocable) y donne acces. Le site la sert sans mot de passe."""
+    if not 20 <= len(token) <= 64:
+        raise HTTPException(404)
+    p = session.scalar(select(Photo).where(Photo.public_token == token))
+    if not p:
+        raise HTTPException(404)
+    return FileResponse(public_image(p.id, p.rel_path), media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
 @app.get("/media/original/{photo_id}")

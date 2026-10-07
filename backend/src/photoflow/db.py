@@ -55,6 +55,9 @@ EXTRA_SQL = [
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reserved_for UUID REFERENCES workers(id) ON DELETE SET NULL",
     "CREATE INDEX IF NOT EXISTS jobs_reserved_idx ON jobs (reserved_for, extractor, status)",
     "ALTER TABLE captions ADD COLUMN IF NOT EXISTS model_rank REAL",
+    # Liens publics des images (export Delcampe).
+    "ALTER TABLE photos ADD COLUMN IF NOT EXISTS public_token TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS photos_public_token_uq ON photos (public_token)",
 ]
 
 

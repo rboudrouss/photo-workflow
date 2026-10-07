@@ -13,7 +13,8 @@ from sqlalchemy import select, text
 
 from .config import settings
 from .db import session_scope
-from .extractors.vlm import persist_caption
+from .extractors.vlm import VLMExtractor, persist_caption
+from .persist import _store_extraction
 from .extractors.vlm_backends.anthropic_backend import _client, message_params, parse_response
 from .images import derived_paths, open_image, resize_for_vlm
 from .models import ClaudeBatch, Photo
@@ -115,6 +116,8 @@ def collect(batch_id: str) -> dict:
                 try:
                     analysis = parse_response(result.result.message)
                     persist_caption(session, uuid.UUID(pid), source, analysis)
+                    _store_extraction(session, uuid.UUID(pid), "vlm", VLMExtractor.version, source.removeprefix("vlm:"),
+                                      {"source": source, **analysis.model_dump(mode="json")})
                     counts["ok"] += 1
                 except Exception as e:
                     log.warning("%s: reponse invalide: %s", pid, e)

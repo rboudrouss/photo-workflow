@@ -16,10 +16,11 @@ export const load: PageLoad = async ({ url }) => {
 		type_objet: get('type_objet'),
 		vlm: get('vlm'),
 		tag: url.searchParams.getAll('tag'),
+		sort: (get('sort') || 'recent') as 'recent' | 'vente' | 'instagram',
 		page: Math.max(1, Number(get('page')) || 1)
 	};
 	// Tags pour affiner : les plus frequents dans les resultats courants (facultatif, ne bloque pas la grille).
-	const { page, ...filters } = params;
+	const { page, sort, ...filters } = params;
 	const refine = api.tags({ ...filters, limit: 15 }).then((r) => r.items, () => []);
 	try {
 		const r = await api.photos({ ...params, page_size: PAGE_SIZE });

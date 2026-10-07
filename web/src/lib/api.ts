@@ -7,6 +7,11 @@ export function media(path: string): string {
 	return path.startsWith('http') ? path : API + path;
 }
 
+/** Origine qui sert /pub/ (liens publics des images) : l'API en dev, le site lui-meme derriere le relais. */
+export function publicBase(): string {
+	return API || location.origin;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
 	const r = await fetch(API + path, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
 	if (!r.ok) throw new Error(`${r.status} ${r.statusText} sur ${path}`);
@@ -40,6 +45,7 @@ export interface PhotoSummary {
 	score?: number | null;
 	distance?: number;
 	nudity_level?: string | null;
+	potentiel?: { vente: number; instagram: number } | null;
 	media: Media;
 }
 
@@ -177,6 +183,63 @@ export async function upload(files: File[]): Promise<UploadItem[]> {
 	return ((await r.json()) as { items: UploadItem[] }).items;
 }
 
+export interface DelcampeCategory {
+	id: number;
+	label: string;
+}
+
+export interface ExportRow {
+	id: string;
+	filename: string;
+	reference: string;
+	title: string;
+	description: string;
+	category_id: number | null;
+	category_source: string;
+	type_objet: string | null;
+	nudity_level: string | null;
+	potentiel: { vente: number; vente_raison: string; instagram: number; instagram_raison: string } | null;
+	public_url: string | null;
+	warnings: string[];
+	media: Media;
+}
+
+export interface ExportOptions {
+	selling_type: 'bid' | 'fixed_price';
+	price: number;
+	minimum_bid_step: number | null;
+	initial_quantity: number;
+	renew_duration: 7 | 10 | 14 | 21 | 28;
+	renew_total_count: 0 | 1 | 2 | 3 | 4 | 5 | 10 | 99;
+	sale_end_time: string | null;
+	sale_end_day: number | null;
+	shipping_model: string | null;
+	weight: number | null;
+}
+
+export interface ExportRequest {
+	ids: string[];
+	base_url: string;
+	format: 'xlsx' | 'csv';
+	options: ExportOptions;
+	overrides: Record<string, { price?: number | null; category_id?: number | null }>;
+}
+
+/** Fichier Easy Uploader (binaire) ; 422 si des lignes n'ont pas de categorie. */
+export async function exportDelcampe(body: ExportRequest): Promise<Blob> {
+	const r = await fetch(API + '/api/export/delcampe', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!r.ok) {
+		const j = await r.json().catch(() => ({}));
+		const d = j.detail;
+		throw new Error(typeof d === 'string' ? d : d?.message ? `${d.message} (${d.ids?.length ?? 0} photo(s))` : `${r.status} sur l'export`);
+	}
+	return r.blob();
+}
+
 type QueryParams = Record<string, string | number | string[] | undefined>;
 
 /** Parametres de requete ; un tableau devient un parametre repete (?tag=a&tag=b). Les valeurs vides sont omises. */
@@ -207,6 +270,8 @@ export const api = {
 	facets: () => call<Facets>('/api/facets'),
 	photos: (params: QueryParams) =>
 		call<{ items: PhotoSummary[]; page: number; page_size: number; total: number | null }>('/api/photos?' + query(params)),
+	/** Ids de tous les resultats (selection globale). */
+	photoIds: (params: QueryParams) => call<{ ids: string[]; truncated: boolean }>('/api/photos/ids?' + query(params)),
 	/** Tags frequents parmi les photos qui passent les filtres ; avec `prefix`, autocompletion. */
 	tags: (params: QueryParams) => call<{ items: Facet[] }>('/api/tags?' + query(params)),
 	photo: (id: string) => call<PhotoDetail>(`/api/photos/${id}`),
@@ -215,6 +280,12 @@ export const api = {
 	setNudity: (id: string, level: string) =>
 		call<any>(`/api/photos/${id}/nudity`, { method: 'PUT', body: JSON.stringify({ level }) }),
 	fiche: (id: string) => call<{ title: string; description: string; category: string | null; tags: string[] }>(`/api/photos/${id}/fiche`),
+	delcampeCategories: () => call<DelcampeCategory[]>('/api/delcampe/categories'),
+	exportPreview: (ids: string[], base_url: string) =>
+		call<{ items: ExportRow[] }>('/api/export/delcampe/preview', { method: 'POST', body: JSON.stringify({ ids, base_url }) }),
+	publicLinks: () => call<{ count: number }>('/api/public-links'),
+	revokePublicLinks: (ids: string[] | null) =>
+		call<{ revoked: number }>('/api/public-links/revoke', { method: 'POST', body: JSON.stringify({ ids }) }),
 	series: (page = 1) => call<{ items: SeriesSummary[]; total: number }>(`/api/series?page=${page}&page_size=40`),
 	serie: (id: number) => call<SeriesDetail>(`/api/series/${id}`),
 	renameSeries: (id: number, name: string) =>

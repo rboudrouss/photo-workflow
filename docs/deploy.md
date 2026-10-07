@@ -24,7 +24,8 @@ Le calcul vient des machines perso (`docker-compose.worker.yml`), approuvées de
 
 Le site (Node) relaie `/api/*` et `/media/*` vers l'API interne (`web/src/hooks.server.ts`). Le navigateur ne
 voit qu'un domaine, l'API n'a pas de domaine. Le même hook porte le mot de passe (Basic) avec `UI_USER` et
-`UI_PASSWORD`, **sauf `/api/worker/*`**, réservé aux workers qui s'authentifient par jeton.
+`UI_PASSWORD`, **sauf `/api/worker/*`**, réservé aux workers qui s'authentifient par jeton, et **`GET /pub/*`**,
+les images que Delcampe télécharge à l'import (lien à jeton aléatoire, révocable depuis la page Export).
 
 Pourquoi pas une authentification Traefik ? Elle couvrirait tout le domaine, workers compris : ils seraient
 rejetés avant d'atteindre l'API. Si tu tiens à Traefik, il faut un second routeur sans middleware pour

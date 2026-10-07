@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { blur, setBlur } from '$lib/blur.svelte';
+	import { selection } from '$lib/selection.svelte';
 
 	let { children } = $props();
 </script>
@@ -12,6 +13,7 @@
 	<a href="/stats">Statut</a>
 	<a href="/workers">Workers</a>
 	<a href="/upload">Ajouter</a>
+	<a href="/export">Export{#if selection.size} <span class="count">{selection.size}</span>{/if}</a>
 	<label class="blur-toggle" title="Flouter les photos avec nudité">
 		<input type="checkbox" checked={blur.on} onchange={(e) => setBlur(e.currentTarget.checked)} /> flouter
 	</label>
@@ -46,6 +48,13 @@
 		margin-left: auto;
 		color: #ddd;
 		font-size: 0.9rem;
+	}
+	.count {
+		background: #39f;
+		color: #fff;
+		border-radius: 999px;
+		padding: 0 0.45rem;
+		font-size: 0.75rem;
 	}
 	.brand {
 		font-weight: 700;

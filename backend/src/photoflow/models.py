@@ -53,6 +53,8 @@ class Photo(Base):
     nudity_level: Mapped[str | None] = mapped_column(String(16), index=True)
     nudity_source: Mapped[str | None] = mapped_column(Text)  # "human", "nudity:<modele>", "vlm:<backend>:<modele>"
     series_id: Mapped[int | None] = mapped_column(ForeignKey("series.id", ondelete="SET NULL"), index=True)
+    # Jeton du lien public /pub/<jeton>.jpg (export Delcampe), NULL = pas de lien. Voir delcampe.py.
+    public_token: Mapped[str | None] = mapped_column(Text, unique=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     captions: Mapped[list["Caption"]] = relationship(back_populates="photo", cascade="all, delete-orphan")

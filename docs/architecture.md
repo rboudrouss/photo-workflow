@@ -123,7 +123,8 @@ Principes :
   en long-poll, l'encode et renvoie le vecteur. Latence de l'ordre de 100 ms, 503 après 8 s sans réponse.
 
 Le mot de passe de l'interface est porté par le site (`web/src/hooks.server.ts`, Basic) : il couvre tout, y
-compris les routes `/api/workers/*` (réserver, rendre), sauf `/api/worker/*` réservé aux jetons des workers.
+compris les routes `/api/workers/*` (réserver, rendre), sauf `/api/worker/*` réservé aux jetons des workers et
+`GET /pub/<jeton>.jpg`, images publiques de l'export Delcampe (jeton aléatoire de 256 bits, révocable).
 
 ## Ajouter un extracteur
 
@@ -140,7 +141,7 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 
 | Table | Clé | Contenu |
 |---|---|---|
-| `photos` | id | fichier, dimensions, pHash, statut |
+| `photos` | id | fichier, dimensions, pHash, statut, `public_token` du lien public (export Delcampe) |
 | `jobs` | (photo, extractor) | file de travail ; `reserved_for` = worker distant désigné |
 | `workers` | id | worker distant : nom, jeton haché, état de ses instances |
 | `pair_requests` | code | demandes d'appairage en attente d'approbation (15 min) |
@@ -156,14 +157,17 @@ Incrémenter `version` quand le résultat change de forme ou de qualité, puis `
 
 ## Interface
 
-Le front ne parle qu'à l'API, en JSON, depuis le navigateur. En production le site relaie `/api` et `/media`
+Le front ne parle qu'à l'API, en JSON, depuis le navigateur. En production le site relaie `/api`, `/media` et `/pub`
 vers l'API interne (une seule origine, pas de CORS) ; en dev le navigateur appelle l'API directement
 (`PUBLIC_API_BASE`). Aucun rendu côté serveur ne dépend de la base.
 
 La recherche et ses filtres (texte, objet, scène, époque, nudité, description par VLM, tags) vivent dans l'URL :
 un lien se partage et le retour arrière retrouve la même page. Les tags sont comparés sans casse ni accents ;
 les propositions (`/api/tags`) sont calculées sur les résultats courants. L'interrupteur « flouter » de la
-barre du haut vaut pour toutes les pages.
+barre du haut vaut pour toutes les pages. Tri par potentiel de vente ou Instagram (notes du VLM).
+
+On coche des photos dans la grille (Maj+clic pour une plage, ou tous les résultats d'un filtre) ; la sélection
+est gardée dans le navigateur et devient un fichier Easy Uploader sur la page Export (`docs/delcampe.md`).
 
 L'interface est aussi l'outil de correction : chaque sauvegarde crée ou met à jour la légende `human`, qui prime
 ensuite partout. Nommer un groupe de visages crée une personne et l'attache à tout le groupe.

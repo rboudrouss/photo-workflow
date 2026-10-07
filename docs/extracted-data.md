@@ -104,9 +104,14 @@ complet : `photoflow vlm schema`. Code : `backend/src/photoflow/extractors/vlm.p
 | `epoque.confiance`, `epoque.indices` | justification | | lire les indices, c'est là que la valeur est |
 | `lieu.*` | pays, région, ville, lieu précis, confiance, indices | architecture, monuments, enseignes, plaques | **faible** en général : sans texte ni monument, une région au mieux. Jamais une certitude |
 | `etat` | défauts physiques visibles | | moyenne |
-| `interet_vente` | faible / moyenne / forte | jugement du modèle selon le marché Delcampe | indicatif, à calibrer avec tes ventes |
-| `categorie_delcampe` | catégorie suggérée | | à remapper sur l'arbre réel de Delcampe |
+| `potentiel.vente` | 0 à 10 + une phrase de raison | demande des collectionneurs, rareté, état du tirage | indicatif, à calibrer avec tes ventes ; sert au tri « potentiel de vente » |
+| `potentiel.instagram` | 0 à 10 + une phrase de raison | composition, lumière, émotion, charme d'époque ; 0 si nudité partielle ou intégrale | jugement esthétique, utile pour trier, pas pour décider seul ; tri « potentiel Instagram » |
+| `categorie_delcampe` | rubrique de Delcampe > Photographies (originaux) : lieux par continent, personnes, métiers, militaire, véhicules, sports, pin-up, nus, avant 1900… | | bonne ; convertie en numéro Delcampe à l'export (`delcampe.py`), les nus rangés d'office par époque |
 | `incertitudes` | ce qu'un humain doit vérifier | | utile pour prioriser la relecture |
+
+Ces deux notes et la rubrique datent de la version 2 de l'extracteur (avant : `interet_vente` faible / moyenne /
+forte et une catégorie en texte libre). Un worker en v2 reprend les photos analysées en v1 par un modèle de rang
+inférieur ou égal au sien ; les notes affichées sont celles du meilleur modèle.
 
 Une ligne `captions` par source : `vlm:llama:<modèle>`, `vlm:anthropic:<modèle>`, `human`. Toutes sont
 conservées, ce qui permet de comparer deux modèles sur les mêmes photos dans l'interface. La légende `human`

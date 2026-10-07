@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # Tailles des derives generes a l'ingestion.
     thumb_size: int = 320
     web_size: int = 1600
+    # Image servie par les liens publics (/pub/<jeton>.jpg, export Delcampe), generee a la premiere demande.
+    public_image_size: int = 2400
 
     # Extracteurs mis en file automatiquement a l'ingestion.
     default_extractors: list[str] = Field(default_factory=lambda: ["physical", "embedding", "faces", "nudity", "vlm"])

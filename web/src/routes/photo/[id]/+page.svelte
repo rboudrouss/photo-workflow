@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { blur } from '$lib/blur.svelte';
+	import { selection, toggleSelected } from '$lib/selection.svelte';
 	import { page } from '$app/state';
 	import { api, media, NUDITY_LEVELS, isExplicit, type PhotoDetail } from '$lib/api';
 
@@ -41,7 +42,7 @@
 	async function copyFiche() {
 		if (!photo) return;
 		const f = await api.fiche(photo.id);
-		fiche = `${f.title}\n\n${f.description}\n\nCategorie : ${f.category ?? ''}\nTags : ${f.tags.join(', ')}`;
+		fiche = `${f.title}\n\n${f.description}\n\nCategorie : ${f.category ?? 'a choisir'}\nTags : ${f.tags.join(', ')}`;
 		try {
 			await navigator.clipboard.writeText(fiche);
 		} catch {}
@@ -95,6 +96,9 @@
 			<div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.5rem">
 				<button onclick={save}>Enregistrer (humain)</button>
 				<button onclick={copyFiche}>Copier la fiche Delcampe</button>
+				<button onclick={() => toggleSelected(photo!.id)} aria-pressed={selection.has(photo.id)}>
+					{selection.has(photo.id) ? '✓ dans la selection' : 'Ajouter a la selection'}
+				</button>
 				<span class="muted">{saved}</span>
 			</div>
 			{#if fiche}<pre class="fiche">{fiche}</pre>{/if}
@@ -134,7 +138,11 @@
 							{#if d.objets?.length}<div><span>objets</span>{d.objets.join(', ')}</div>{/if}
 							{#if d.texte_visible?.length}<div><span>texte</span>{d.texte_visible.join(' | ')}</div>{/if}
 							{#if d.etat?.length}<div><span>etat</span>{d.etat.join(', ')}</div>{/if}
-							{#if d.interet_vente}<div><span>interet</span>{d.interet_vente} · {d.categorie_delcampe}</div>{/if}
+							{#if d.potentiel}
+								<div><span>vente</span><b>{d.potentiel.vente}/10</b> — {d.potentiel.vente_raison}</div>
+								<div><span>instagram</span><b>{d.potentiel.instagram}/10</b> — {d.potentiel.instagram_raison}</div>
+							{:else if d.interet_vente}<div><span>interet</span>{d.interet_vente}</div>{/if}
+							{#if d.categorie_delcampe}<div><span>delcampe</span>{d.categorie_delcampe}</div>{/if}
 							{#if d.incertitudes?.length}<div><span>a verifier</span>{d.incertitudes.join('; ')}</div>{/if}
 							{#if d.nudite && d.nudite.niveau !== 'aucune'}<div><span>nudite</span>{d.nudite.niveau} · {d.nudite.contexte} — {d.nudite.explication}</div>{/if}
 							{#if d.tags?.length}<div><span>tags</span>{#each d.tags as t}<a class="tag" href={`/?tag=${encodeURIComponent(t.toLowerCase())}`} title="Voir les photos avec ce tag">{t}</a>{/each}</div>{/if}

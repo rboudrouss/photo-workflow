@@ -8,7 +8,7 @@ consultation et de correction, et un export vers Delcampe.
 - `docs/deploy.md` : le serveur sur Coolify, et comment brancher un worker.
 - `docs/extracted-data.md` : tout ce qui est extrait, par quel moyen, avec quelles limites.
 - `docs/models.md` : quel modèle pour quelle machine, pros et cons, coûts.
-- `docs/delcampe.md` : ce qui est possible côté publication.
+- `docs/delcampe.md` : publier sur Delcampe (Easy Uploader, sélection, page Export, liens publics des images).
 
 ## Organisation
 
@@ -29,7 +29,8 @@ Toute machine qui calcule est un **worker** : du portable à la grosse machine, 
 
 Déployé par Coolify depuis `docker-compose.coolify.yml` (détails dans `docs/deploy.md`). Les photos s'ajoutent
 depuis la page « Ajouter » (glisser-déposer, noms de fichiers conservés) ou en les déposant dans le dossier des
-photos du serveur : le watcher les ingère sous une minute.
+photos du serveur : le watcher les ingère sous une minute. Pour vendre : trier par potentiel de vente, cocher
+des photos, puis page « Export » (fichier Easy Uploader pour Delcampe).
 
 ## Worker (n'importe quelle machine)
 
